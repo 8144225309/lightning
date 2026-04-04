@@ -102,7 +102,7 @@ struct state {
 
 	bool dev_accept_any_channel_type;
 
-	/* bLIP-56: channel factory info (if channel is inside a factory) */
+	/* Channel factory info (if inside a factory) */
 	bool has_factory;
 	u8 factory_protocol_id[32];
 	u8 factory_instance_id[32];
@@ -312,7 +312,7 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 		channel_type_set_scid_alias(state->channel_type);
 	}
 
-	/* bLIP-56: factory channels MUST use option_zeroconf */
+	/* Factory channels MUST use option_zeroconf */
 	if (state->has_factory)
 		channel_type_set_zeroconf(state->channel_type);
 
@@ -351,7 +351,7 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 	 */
 	open_tlvs->channel_type = state->channel_type->features;
 
-	/* bLIP-56: include factory TLV if this is a factory channel */
+	/* Include factory TLV if this is a factory channel */
 	if (state->has_factory) {
 		open_tlvs->channel_in_factory = tal(open_tlvs,
 			struct tlv_open_channel_tlvs_channel_in_factory);
@@ -441,8 +441,7 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 				   "accept_channel without a channel_type");
 	}
 
-	/* bLIP-56: If we sent channel_in_factory, peer must echo it back.
-	 * If we didn't, peer must not include it. */
+	/* Validate channel_in_factory TLV echo */
 	if (state->has_factory && !accept_tlvs->channel_in_factory) {
 		negotiation_failed(state,
 				   "Peer did not include channel_in_factory in accept_channel");
@@ -943,7 +942,7 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 		}
 	}
 
-	/* bLIP-56: If channel_in_factory is present, option_zeroconf MUST be set */
+	/* Factory channel requires option_zeroconf */
 	if (open_tlvs->channel_in_factory
 	    && !channel_type_has(state->channel_type, OPT_ZEROCONF)) {
 		negotiation_failed(state,

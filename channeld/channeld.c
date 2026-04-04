@@ -122,7 +122,7 @@ struct peer {
 	/* Current blockheight */
 	u32 our_blockheight;
 
-	/* bLIP-56: factory early warning time (0 if not a factory channel) */
+	/* Factory early warning time (0 if not a factory channel) */
 	u16 factory_early_warning_time;
 
 	/* FIXME: Remove this. */
@@ -568,7 +568,7 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
 #define FACTORY_SUBMSG_CHANGE_CONTINUE	12
 #define FACTORY_SUBMSG_CHANGE_LOCKED	14
 
-/* bLIP-56: Forward factory protocol message from peer to lightningd */
+/* Forward factory protocol message from peer to lightningd */
 static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 {
 	u16 factory_submessage_id;
@@ -587,7 +587,7 @@ static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 								data)));
 }
 
-/* bLIP-56: Send factory protocol message from lightningd to peer */
+/* Send factory protocol message from lightningd to peer */
 static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
 {
 	u16 factory_submessage_id;
@@ -604,10 +604,8 @@ static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
 					       data)));
 }
 
-/* bLIP-56: Sign a commitment transaction for a new factory funding outpoint.
- * This is called after factory_change_funding (submsg 10) has been exchanged
- * and both sides agree on the new funding txid. The plugin triggers this
- * via the factory-sign-commitment RPC. */
+/* Sign commitment tx for a new factory funding outpoint.
+ * Called after factory_change_funding (submsg 10) exchange. */
 static void handle_master_factory_sign_commitment(struct peer *peer,
 						  const u8 *msg)
 {
@@ -657,7 +655,7 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 	}
 }
 
-/* bLIP-56: Factory funding tx confirmed on-chain (dissolution). */
+/* Factory funding tx confirmed on-chain (dissolution). */
 static void handle_master_factory_funding_confirmed(struct peer *peer,
 						    const u8 *msg)
 {
@@ -674,12 +672,11 @@ static void handle_master_factory_funding_confirmed(struct peer *peer,
 		    fmt_bitcoin_txid(tmpctx, &funding_txid),
 		    funding_outnum, depth);
 
-	/* Channel transitions from factory-mode to normal confirmed mode.
-	 * Existing penalty/breach logic applies from here. */
+	/* Channel transitions to normal confirmed mode */
 	peer->factory_early_warning_time = 0;
 }
 
-/* bLIP-56: Abort a pending factory state change. */
+/* Abort a pending factory state change */
 static void handle_master_factory_change_abort(struct peer *peer,
 					       const u8 *msg)
 {
@@ -688,7 +685,7 @@ static void handle_master_factory_change_abort(struct peer *peer,
 
 	status_info("Factory change aborted, resuming channel");
 
-	/* Notify peer of abort (submsg 16). */
+	/* Tell peer we're aborting (submsg 16) */
 	{
 		u8 *empty = tal_arr(tmpctx, u8, 0);
 		peer_write(peer->pps,
@@ -5192,7 +5189,7 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		    /* lnd sends these early; it's harmless. */
 		    && type != WIRE_UPDATE_FEE
 		    && type != WIRE_ANNOUNCEMENT_SIGNATURES
-		    /* bLIP-56: factory messages may arrive before channel_ready */
+		    /* Factory messages may arrive before channel_ready */
 		    && type != WIRE_FACTORY_MESSAGE) {
 			peer_failed_warn(peer->pps, &peer->channel_id,
 					 "%s (%u) before funding locked",
@@ -5293,7 +5290,7 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		handle_unexpected_reestablish(peer, msg);
 		return;
 
-	/* bLIP-56: factory protocol messages — forward to lightningd */
+	/* Factory protocol messages — forward to lightningd */
 	case WIRE_FACTORY_MESSAGE:
 		handle_peer_factory_message(peer, msg);
 		return;
@@ -6551,9 +6548,7 @@ static void handle_blockheight(struct peer *peer, const u8 *inmsg)
 	/* Save it, so we know */
 	peer->our_blockheight = blockheight;
 
-	/* bLIP-56: HTLC early warning.
-	 * The plugin monitors HTLC timeouts via listhtlcs RPC and
-	 * factory_early_warning_time from the channel open. */
+	/* HTLC early warning: plugin monitors via listhtlcs RPC */
 
 	if (peer->channel->opener == LOCAL)
 		start_commit_timer(peer);
@@ -6785,27 +6780,27 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_ABORT:
 		handle_abort_req(peer, msg);
 		return;
-	/* bLIP-56: factory message from lightningd to send to peer */
+	/* Factory message from lightningd — send to peer */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
 		handle_master_factory_message_out(peer, msg);
 		return;
-	/* bLIP-56: factory state change from lightningd */
+	/* Factory state change from lightningd */
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 		handle_master_factory_change_init(peer, msg);
 		return;
-	/* bLIP-56: sign commitment for new factory funding outpoint */
+	/* Sign commitment for new factory funding outpoint */
 	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
 		handle_master_factory_sign_commitment(peer, msg);
 		return;
-	/* bLIP-56: factory funding confirmed on-chain (dissolution) */
+	/* Factory funding confirmed on-chain (dissolution) */
 	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
 		handle_master_factory_funding_confirmed(peer, msg);
 		return;
-	/* bLIP-56: abort pending factory change */
+	/* Abort pending factory change */
 	case WIRE_CHANNELD_FACTORY_CHANGE_ABORT:
 		handle_master_factory_change_abort(peer, msg);
 		return;
-	/* bLIP-56: these are channeld->master only, not master->channeld */
+	/* Channeld->master only */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
 	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
 		break;

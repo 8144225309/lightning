@@ -1,0 +1,40 @@
+{
+  "$schema": "../rpc-schema-draft.json",
+  "type": "object",
+  "rpc": "factory-change",
+  "title": "Initiate a factory state change",
+  "description": [
+    "`factory-change` tells the channel daemon to begin a factory state change by sending a `factory_change_init` (submessage 6) to the peer. The channel must be in a factory."
+  ],
+  "request": {
+    "required": ["channel_id", "new_funding_txid", "new_funding_outnum"],
+    "additionalProperties": false,
+    "properties": {
+      "channel_id": {
+        "type": "hash",
+        "description": ["The factory channel to change."]
+      },
+      "new_funding_txid": {
+        "type": "txid",
+        "description": ["The new funding transaction ID after the factory state change."]
+      },
+      "new_funding_outnum": {
+        "type": "u32",
+        "description": ["The output index in the new funding transaction."]
+      }
+    }
+  },
+  "response": {
+    "required": ["initiated"],
+    "properties": {
+      "initiated": {
+        "type": "boolean",
+        "description": ["Whether the state change was initiated."]
+      }
+    }
+  },
+  "see_also": [
+    "lightning-factory-send(7)",
+    "lightning-factory-sign-commitment(7)"
+  ]
+}

@@ -292,8 +292,7 @@ static void handle_splice_feerate_error(struct lightningd *ld,
 	}
 }
 
-/* bLIP-56: Handle incoming factory protocol message from peer.
- * Notify plugins so the factory plugin can process it. */
+/* Forward factory protocol message from peer to plugins */
 static void handle_factory_message_in(struct lightningd *ld,
 				      struct channel *channel,
 				      const u8 *msg)
@@ -314,7 +313,7 @@ static void handle_factory_message_in(struct lightningd *ld,
 		  "Factory message from peer: submsg_id=%u len=%zu",
 		  factory_submessage_id, tal_bytelen(data));
 
-	/* Notify plugins via a JSON notification. */
+	/* Notify plugins */
 	{
 		struct jsonrpc_notification *n;
 		n = jsonrpc_notification_start(NULL, "factory_message");
@@ -329,8 +328,7 @@ static void handle_factory_message_in(struct lightningd *ld,
 	}
 }
 
-/* bLIP-56: Factory state change has locked (new funding outpoint).
- * Update the channel's funding outpoint to the new factory state. */
+/* Factory state change locked — update funding outpoint */
 static void handle_factory_change_locked(struct lightningd *ld,
 					 struct channel *channel,
 					 const u8 *msg)
@@ -349,11 +347,10 @@ static void handle_factory_change_locked(struct lightningd *ld,
 		 "Factory change locked: new funding txid %s",
 		 fmt_bitcoin_txid(tmpctx, &locked_funding_txid));
 
-	/* Update the channel's funding outpoint. */
+	/* Update funding outpoint */
 	channel->funding.txid = locked_funding_txid;
 	wallet_channel_save(ld->wallet, channel);
 
-	/* Notify plugins. */
 	{
 		struct jsonrpc_notification *n;
 		n = jsonrpc_notification_start(NULL, "factory_change_locked");
@@ -1691,7 +1688,7 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_UPGRADED:
 		handle_channel_upgrade(sd->channel, msg);
 		break;
-	/* bLIP-56: factory message from peer via channeld */
+	/* Factory message from peer via channeld */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
 		handle_factory_message_in(sd->ld, sd->channel, msg);
 		break;
@@ -2865,8 +2862,7 @@ static const struct json_command dev_quiesce_command = {
 };
 AUTODATA(json_command, &dev_quiesce_command);
 
-/* bLIP-56: RPC to send a factory protocol message to a peer.
- * Used by the factory plugin to exchange factory-specific data. */
+/* Send a factory protocol message to a peer */
 static struct command_result *json_factory_send(struct command *cmd,
 						const char *buffer,
 						const jsmntok_t *obj UNNEEDED,
@@ -2909,8 +2905,7 @@ static const struct json_command factory_send_command = {
 };
 AUTODATA(json_command, &factory_send_command);
 
-/* bLIP-56: RPC to initiate a factory state change.
- * Triggers the STFU → splice-like flow for updating the funding outpoint. */
+/* Initiate a factory state change */
 static struct command_result *json_factory_change(struct command *cmd,
 						  const char *buffer,
 						  const jsmntok_t *obj UNNEEDED,
@@ -2953,8 +2948,7 @@ static const struct json_command factory_change_command = {
 };
 AUTODATA(json_command, &factory_change_command);
 
-/* bLIP-56: RPC to sign a commitment for a new factory funding outpoint.
- * Called by the plugin after factory_change_funding (submsg 10) exchange. */
+/* Sign commitment for a new factory funding outpoint */
 static struct command_result *json_factory_sign_commitment(struct command *cmd,
 							   const char *buffer,
 							   const jsmntok_t *obj UNNEEDED,

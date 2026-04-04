@@ -426,7 +426,7 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	}
 	remote_commit->chainparams = chainparams;
 
-	/* bLIP-56: factory channels use 0 minimum depth (0-conf behavior) */
+	/* Factory channels use 0 minimum depth */
 	if (has_factory) {
 		fc->uc->minimum_depth = 0;
 		log_info(ld->log, "Channel is inside factory, using 0-conf");
@@ -558,7 +558,7 @@ static void opening_fundee_finished(struct subd *openingd,
 
 	remote_commit->chainparams = chainparams;
 
-	/* bLIP-56: factory channels use 0 minimum depth */
+	/* Factory channels use 0 minimum depth */
 	if (has_factory) {
 		uc->minimum_depth = 0;
 		log_info(ld->log, "Fundee: channel is inside factory, using 0-conf");
@@ -693,7 +693,7 @@ struct openchannel_hook_payload {
 	struct channel_type *channel_type;
 	char *errmsg;
 
-	/* bLIP-56: factory info */
+	/* Factory info */
 	bool has_factory;
 	u8 factory_protocol_id[32];
 	u8 factory_instance_id[32];
