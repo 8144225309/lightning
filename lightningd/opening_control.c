@@ -467,8 +467,10 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 		goto cleanup;
 	}
 
-	/* Watch for funding confirms */
-	channel_watch_funding(ld, channel);
+	/* Watch for funding confirms (skip for factory channels —
+	 * the funding tx is a factory leaf, not broadcast on chain) */
+	if (!has_factory)
+		channel_watch_funding(ld, channel);
 
 	if (pbase)
 		wallet_penalty_base_add(ld->wallet, channel->dbid, pbase);
@@ -590,7 +592,10 @@ static void opening_fundee_finished(struct subd *openingd,
 		  fmt_bitcoin_txid(reply,
 				 &channel->funding.txid));
 
-	channel_watch_funding(ld, channel);
+	/* Skip funding watch for factory channels — funding tx is
+	 * a factory leaf, not broadcast on chain. */
+	if (!has_factory)
+		channel_watch_funding(ld, channel);
 
 	/* Tell plugins about the success */
 	notify_channel_opened(ld, &channel->peer->id, &channel->funding_sats,
