@@ -655,46 +655,6 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 	}
 }
 
-/* Factory funding tx confirmed on-chain (dissolution). */
-static void handle_master_factory_funding_confirmed(struct peer *peer,
-						    const u8 *msg)
-{
-	struct bitcoin_txid funding_txid;
-	u32 funding_outnum, depth;
-
-	if (!fromwire_channeld_factory_funding_confirmed(msg,
-							 &funding_txid,
-							 &funding_outnum,
-							 &depth))
-		master_badmsg(WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED, msg);
-
-	status_info("Factory funding confirmed on-chain: %s:%u depth=%u",
-		    fmt_bitcoin_txid(tmpctx, &funding_txid),
-		    funding_outnum, depth);
-
-	/* Channel transitions to normal confirmed mode */
-	peer->factory_early_warning_time = 0;
-}
-
-/* Abort a pending factory state change */
-static void handle_master_factory_change_abort(struct peer *peer,
-					       const u8 *msg)
-{
-	if (!fromwire_channeld_factory_change_abort(msg))
-		master_badmsg(WIRE_CHANNELD_FACTORY_CHANGE_ABORT, msg);
-
-	status_info("Factory change aborted, resuming channel");
-
-	/* Tell peer we're aborting (submsg 16) */
-	{
-		u8 *empty = tal_arr(tmpctx, u8, 0);
-		peer_write(peer->pps,
-			   take(towire_factory_message(NULL,
-						       16,
-						       empty)));
-	}
-}
-
 static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 {
 	struct bitcoin_txid new_funding_txid;
@@ -722,26 +682,11 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 						       payload)));
 	}
 
-	/* The peer should respond with factory_change_ack (submsg 8),
-	 * which will arrive via handle_peer_factory_message and get
-	 * forwarded to lightningd. The plugin coordinates the flow.
+	/* Peer responds with factory_change_ack (submsg 8) via
+	 * handle_peer_factory_message → forwarded to plugin.
 	 *
-	 * Full factory change flow (bLIP-56):
-	 * 1. Plugin calls factory-change RPC → lightningd sends
-	 *    WIRE_CHANNELD_FACTORY_CHANGE_INIT → we send submsg 6
-	 * 2. Peer responds with submsg 8 (ack) → forwarded to plugin
-	 * 3. Both sides send submsg 10 (funding) with new txid → forwarded
-	 * 4. Both sides send commitment_signed for new funding outpoint
-	 *    (reuses splice inflight mechanism via channeld_add_inflight)
-	 * 5. Plugin signals ready → submsg 12 (continue) exchanged
-	 * 6. Plugin signals locked → submsg 14 (locked) exchanged
-	 * 7. lightningd updates funding outpoint in DB
-	 *
-	 * Steps 2-6 are handled by the generic factory_message passthrough.
-	 * The plugin orchestrates the state machine and uses factory-send
-	 * RPC to send each submessage at the right time.
-	 * commitment_signed reuses the splice inflight path.
-	 */
+	 * NOTE: bLIP-56 requires STFU quiescence before factory changes.
+	 * Not yet implemented — needs splice STFU code factoring. */
 }
 
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
@@ -6792,14 +6737,9 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
 		handle_master_factory_sign_commitment(peer, msg);
 		return;
-	/* Factory funding confirmed on-chain (dissolution) */
+	/* Not yet implemented — wire reserved for future use */
 	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
-		handle_master_factory_funding_confirmed(peer, msg);
-		return;
-	/* Abort pending factory change */
 	case WIRE_CHANNELD_FACTORY_CHANGE_ABORT:
-		handle_master_factory_change_abort(peer, msg);
-		return;
 	/* Channeld->master only */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
 	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
