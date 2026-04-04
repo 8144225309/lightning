@@ -291,7 +291,7 @@ static void handle_splice_feerate_error(struct lightningd *ld,
 }
 
 /* bLIP-56: Handle incoming factory protocol message from peer.
- * Route to plugins via the custommsg hook infrastructure. */
+ * Notify plugins so the factory plugin can process it. */
 static void handle_factory_message_in(struct lightningd *ld,
 				      struct channel *channel,
 				      const u8 *msg)
@@ -310,16 +310,27 @@ static void handle_factory_message_in(struct lightningd *ld,
 		return;
 	}
 
-	log_info(channel->log,
-		 "Factory message from peer: submsg_id=%u len=%u",
-		 factory_submessage_id, len);
+	log_debug(channel->log,
+		  "Factory message from peer: submsg_id=%u len=%u",
+		  factory_submessage_id, len);
 
-	/* TODO: Route to factory plugin via a dedicated hook.
-	 * For now, log and drop. The plugin hook will be added
-	 * when the factory plugin interface is finalized. */
+	/* Notify plugins via a JSON notification. The factory plugin
+	 * subscribes to "factory_message" and handles the protocol. */
+	{
+		struct json_stream *js;
+		js = plugin_notification_start(ld, "factory_message");
+		json_add_string(js, "channel_id",
+				fmt_channel_id(tmpctx, &channel->cid));
+		json_add_node_id(js, "peer_id", &channel->peer->id);
+		json_add_u32(js, "factory_submessage_id",
+			     factory_submessage_id);
+		json_add_hex(js, "data", data, len);
+		plugin_notification_end(ld, js);
+	}
 }
 
-/* bLIP-56: Factory state change has locked (new funding outpoint). */
+/* bLIP-56: Factory state change has locked (new funding outpoint).
+ * Update the channel's funding outpoint to the new factory state. */
 static void handle_factory_change_locked(struct lightningd *ld,
 					 struct channel *channel,
 					 const u8 *msg)
@@ -338,9 +349,21 @@ static void handle_factory_change_locked(struct lightningd *ld,
 		 "Factory change locked: new funding txid %s",
 		 fmt_bitcoin_txid(tmpctx, &locked_funding_txid));
 
-	/* TODO: Update channel's funding outpoint to the new factory state.
-	 * This is equivalent to a splice completing — the channel's
-	 * funding transaction changes but the channel state carries over. */
+	/* Update the channel's funding outpoint. The output index
+	 * stays the same within the factory tree structure. */
+	channel->funding.txid = locked_funding_txid;
+	wallet_channel_save(ld->wallet, channel);
+
+	/* Notify plugins that the factory state changed. */
+	{
+		struct json_stream *js;
+		js = plugin_notification_start(ld, "factory_change_locked");
+		json_add_string(js, "channel_id",
+				fmt_channel_id(tmpctx, &channel->cid));
+		json_add_txid(js, "locked_funding_txid",
+			      &locked_funding_txid);
+		plugin_notification_end(ld, js);
+	}
 }
 
 static void handle_splice_abort(struct lightningd *ld,
@@ -2838,3 +2861,109 @@ static const struct json_command dev_quiesce_command = {
 	.dev_only = true,
 };
 AUTODATA(json_command, &dev_quiesce_command);
+
+/* bLIP-56: RPC to send a factory protocol message to a peer.
+ * Used by the factory plugin to exchange factory-specific data. */
+static struct command_result *json_factory_send(struct command *cmd,
+						const char *buffer,
+						const jsmntok_t *obj UNNEEDED,
+						const jsmntok_t *params)
+{
+	struct channel_id *cid;
+	u64 *submsg_id;
+	u8 *data;
+	struct channel *channel;
+
+	if (!param(cmd, buffer, params,
+		   p_req("channel_id", param_channel_id, &cid),
+		   p_req("submessage_id", param_u64, submsg_id),
+		   p_req("data", param_bin_from_hex, &data),
+		   NULL))
+		return command_param_failed();
+
+	channel = any_channel_by_scid(cmd->ld, NULL, false);
+	/* Find channel by channel_id */
+	struct peer *peer;
+	list_for_each(&cmd->ld->peers, peer, list) {
+		list_for_each(&peer->channels, channel, list) {
+			if (channel_id_eq(&channel->cid, cid))
+				goto found;
+		}
+	}
+	return command_fail(cmd, LIGHTNINGD, "Channel not found");
+
+found:
+	if (!channel->owner)
+		return command_fail(cmd, LIGHTNINGD, "Channel not active");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	subd_send_msg(channel->owner,
+		      take(towire_channeld_factory_message_out(NULL,
+							       (u16)*submsg_id,
+							       tal_bytelen(data),
+							       data)));
+
+	struct json_stream *js = json_stream_success(cmd);
+	json_add_bool(js, "sent", true);
+	return command_success(cmd, js);
+}
+
+static const struct json_command factory_send_command = {
+	"factory-send",
+	json_factory_send,
+};
+AUTODATA(json_command, &factory_send_command);
+
+/* bLIP-56: RPC to initiate a factory state change.
+ * Triggers the STFU → splice-like flow for updating the funding outpoint. */
+static struct command_result *json_factory_change(struct command *cmd,
+						  const char *buffer,
+						  const jsmntok_t *obj UNNEEDED,
+						  const jsmntok_t *params)
+{
+	struct channel_id *cid;
+	struct bitcoin_txid *new_funding_txid;
+	u32 *new_funding_outnum;
+	struct channel *channel;
+
+	if (!param(cmd, buffer, params,
+		   p_req("channel_id", param_channel_id, &cid),
+		   p_req("new_funding_txid", param_bitcoin_txid, &new_funding_txid),
+		   p_req("new_funding_outnum", param_number, &new_funding_outnum),
+		   NULL))
+		return command_param_failed();
+
+	/* Find channel by channel_id */
+	struct peer *peer;
+	list_for_each(&cmd->ld->peers, peer, list) {
+		list_for_each(&peer->channels, channel, list) {
+			if (channel_id_eq(&channel->cid, cid))
+				goto found;
+		}
+	}
+	return command_fail(cmd, LIGHTNINGD, "Channel not found");
+
+found:
+	if (!channel->owner)
+		return command_fail(cmd, LIGHTNINGD, "Channel not active");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	subd_send_msg(channel->owner,
+		      take(towire_channeld_factory_change_init(NULL,
+							       new_funding_txid,
+							       *new_funding_outnum)));
+
+	struct json_stream *js = json_stream_success(cmd);
+	json_add_bool(js, "initiated", true);
+	return command_success(cmd, js);
+}
+
+static const struct json_command factory_change_command = {
+	"factory-change",
+	json_factory_change,
+};
+AUTODATA(json_command, &factory_change_command);
