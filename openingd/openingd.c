@@ -101,6 +101,12 @@ struct state {
 	bool allowdustreserve;
 
 	bool dev_accept_any_channel_type;
+
+	/* bLIP-56: channel factory info (if channel is inside a factory) */
+	bool has_factory;
+	u8 factory_protocol_id[32];
+	u8 factory_instance_id[32];
+	u16 factory_early_warning_time;
 };
 
 /*~ If we can't agree on parameters, we fail to open the channel.
@@ -340,6 +346,18 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 	 *       negotiated.
 	 */
 	open_tlvs->channel_type = state->channel_type->features;
+
+	/* bLIP-56: include factory TLV if this is a factory channel */
+	if (state->has_factory) {
+		open_tlvs->channel_in_factory = tal(open_tlvs,
+			struct tlv_open_channel_tlvs_channel_in_factory);
+		memcpy(open_tlvs->channel_in_factory->factory_protocol_id,
+		       state->factory_protocol_id, 32);
+		memcpy(open_tlvs->channel_in_factory->factory_instance_id,
+		       state->factory_instance_id, 32);
+		open_tlvs->channel_in_factory->factory_early_warning_time =
+			state->factory_early_warning_time;
+	}
 
 	msg = towire_open_channel(NULL,
 				  &chainparams->genesis_blockhash,
@@ -819,7 +837,11 @@ static u8 *funder_channel_complete(struct state *state)
 					   state->feerate_per_kw,
 					   state->localconf.channel_reserve,
 					   state->upfront_shutdown_script[REMOTE],
-					   state->channel_type);
+					   state->channel_type,
+					   state->has_factory,
+					   state->factory_protocol_id,
+					   state->factory_instance_id,
+					   state->factory_early_warning_time);
 }
 
 /*~ The peer sent us an `open_channel`, that means we're the fundee. */
@@ -1009,19 +1031,27 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 
 	/* Check with lightningd that we can accept this?  In particular,
 	 * if we have an existing channel, we don't support it. */
-	msg = towire_openingd_got_offer(NULL,
-				       state->funding_sats,
-				       state->push_msat,
-				       state->remoteconf.dust_limit,
-				       state->remoteconf.max_htlc_value_in_flight,
-				       state->remoteconf.channel_reserve,
-				       state->remoteconf.htlc_minimum,
-				       state->feerate_per_kw,
-				       state->remoteconf.to_self_delay,
-				       state->remoteconf.max_accepted_htlcs,
-				       channel_flags,
-				       state->upfront_shutdown_script[REMOTE],
-				       state->channel_type);
+	{
+		bool has_factory = (open_tlvs->channel_in_factory != NULL);
+		u8 empty_id[32] = {0};
+		msg = towire_openingd_got_offer(NULL,
+					       state->funding_sats,
+					       state->push_msat,
+					       state->remoteconf.dust_limit,
+					       state->remoteconf.max_htlc_value_in_flight,
+					       state->remoteconf.channel_reserve,
+					       state->remoteconf.htlc_minimum,
+					       state->feerate_per_kw,
+					       state->remoteconf.to_self_delay,
+					       state->remoteconf.max_accepted_htlcs,
+					       channel_flags,
+					       state->upfront_shutdown_script[REMOTE],
+					       state->channel_type,
+					       has_factory,
+					       has_factory ? open_tlvs->channel_in_factory->factory_protocol_id : empty_id,
+					       has_factory ? open_tlvs->channel_in_factory->factory_instance_id : empty_id,
+					       has_factory ? open_tlvs->channel_in_factory->factory_early_warning_time : 0);
+	}
 	wire_sync_write(REQ_FD, take(msg));
 	msg = wire_sync_read(tmpctx, REQ_FD);
 
@@ -1299,7 +1329,11 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 				     state->localconf.channel_reserve,
 				     state->upfront_shutdown_script[LOCAL],
 				     state->upfront_shutdown_script[REMOTE],
-				     state->channel_type);
+				     state->channel_type,
+				     open_tlvs->channel_in_factory != NULL,
+				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_protocol_id : (u8[32]){0},
+				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_instance_id : (u8[32]){0},
+				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_early_warning_time : 0);
 }
 
 /*~ Standard "peer sent a message, handle it" demuxer.  Though it really only
@@ -1379,7 +1413,11 @@ static u8 *handle_master_in(struct state *state)
 						    &state->channel_id,
 						    &channel_flags,
 						    &state->reserve,
-						    &ctype))
+						    &ctype,
+						    &state->has_factory,
+						    state->factory_protocol_id,
+						    state->factory_instance_id,
+						    &state->factory_early_warning_time))
 			master_badmsg(WIRE_OPENINGD_FUNDER_START, msg);
 		msg = funder_channel_start(state, channel_flags, nonanchor_feerate, anchor_feerate, ctype);
 		tal_free(ctype);
