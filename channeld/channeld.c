@@ -570,6 +570,48 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
 	implied_peer_splice_locked(peer, splice_txid);
 }
 
+/* bLIP-56: Forward factory protocol message from peer to lightningd */
+static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
+{
+	u16 factory_submessage_id;
+	u16 len;
+	u8 *data;
+
+	if (!fromwire_factory_message(tmpctx, msg,
+				      &factory_submessage_id,
+				      &len,
+				      &data))
+		peer_failed_warn(peer->pps, &peer->channel_id,
+				 "Bad factory_message %s",
+				 tal_hex(msg, msg));
+
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_factory_message_in(NULL,
+								factory_submessage_id,
+								len,
+								data)));
+}
+
+/* bLIP-56: Send factory protocol message from lightningd to peer */
+static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
+{
+	u16 factory_submessage_id;
+	u16 len;
+	u8 *data;
+
+	if (!fromwire_channeld_factory_message_out(tmpctx, msg,
+						   &factory_submessage_id,
+						   &len,
+						   &data))
+		master_badmsg(WIRE_CHANNELD_FACTORY_MESSAGE_OUT, msg);
+
+	peer_write(peer->pps,
+		   take(towire_factory_message(NULL,
+					       factory_submessage_id,
+					       len,
+					       data)));
+}
+
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
 {
 	struct channel_id chanid;
@@ -5128,7 +5170,9 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		    && type != WIRE_TX_SIGNATURES
 		    /* lnd sends these early; it's harmless. */
 		    && type != WIRE_UPDATE_FEE
-		    && type != WIRE_ANNOUNCEMENT_SIGNATURES) {
+		    && type != WIRE_ANNOUNCEMENT_SIGNATURES
+		    /* bLIP-56: factory messages may arrive before channel_ready */
+		    && type != WIRE_FACTORY_MESSAGE) {
 			peer_failed_warn(peer->pps, &peer->channel_id,
 					 "%s (%u) before funding locked",
 					 peer_wire_name(type), type);
@@ -5226,6 +5270,11 @@ static void peer_in(struct peer *peer, const u8 *msg)
 
 	case WIRE_CHANNEL_REESTABLISH:
 		handle_unexpected_reestablish(peer, msg);
+		return;
+
+	/* bLIP-56: factory protocol messages — forward to lightningd */
+	case WIRE_FACTORY_MESSAGE:
+		handle_peer_factory_message(peer, msg);
 		return;
 
 	/* These are all swallowed by connectd */
@@ -6737,6 +6786,15 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_ABORT:
 		handle_abort_req(peer, msg);
 		return;
+	/* bLIP-56: factory message from lightningd to send to peer */
+	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
+		handle_master_factory_message_out(peer, msg);
+		return;
+	/* bLIP-56: these are channeld->master only, not master->channeld */
+	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
+	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
+	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
+		break;
 	case WIRE_CHANNELD_SPLICE_CONFIRMED_INIT:
 	case WIRE_CHANNELD_SPLICE_CONFIRMED_SIGNED:
 	case WIRE_CHANNELD_SPLICE_SENDING_SIGS:
