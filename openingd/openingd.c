@@ -312,6 +312,10 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 		channel_type_set_scid_alias(state->channel_type);
 	}
 
+	/* bLIP-56: factory channels MUST use option_zeroconf */
+	if (state->has_factory)
+		channel_type_set_zeroconf(state->channel_type);
+
 	/* Which feerate do we use?  (We can lowball fees if using anchors!) */
 	if (channel_type_has_anchors(state->channel_type)) {
 		state->feerate_per_kw = anchor_feerate;
@@ -435,6 +439,19 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 	if (!accept_tlvs->channel_type) {
 		negotiation_failed(state,
 				   "accept_channel without a channel_type");
+	}
+
+	/* bLIP-56: If we sent channel_in_factory, peer must echo it back.
+	 * If we didn't, peer must not include it. */
+	if (state->has_factory && !accept_tlvs->channel_in_factory) {
+		negotiation_failed(state,
+				   "Peer did not include channel_in_factory in accept_channel");
+		return NULL;
+	}
+	if (!state->has_factory && accept_tlvs->channel_in_factory) {
+		negotiation_failed(state,
+				   "Peer included unexpected channel_in_factory in accept_channel");
+		return NULL;
 	}
 
 	/* Simple case: caller specified, don't allow any variants */
@@ -924,6 +941,14 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 							   open_tlvs->channel_type));
 			return NULL;
 		}
+	}
+
+	/* bLIP-56: If channel_in_factory is present, option_zeroconf MUST be set */
+	if (open_tlvs->channel_in_factory
+	    && !channel_type_has(state->channel_type, OPT_ZEROCONF)) {
+		negotiation_failed(state,
+				   "Factory channel must use option_zeroconf");
+		return NULL;
 	}
 
 	/* BOLT #2:

@@ -122,6 +122,9 @@ struct peer {
 	/* Current blockheight */
 	u32 our_blockheight;
 
+	/* bLIP-56: factory early warning time (0 if not a factory channel) */
+	u16 factory_early_warning_time;
+
 	/* FIXME: Remove this. */
 	struct short_channel_id short_channel_ids[NUM_SIDES];
 
@@ -637,9 +640,26 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 						       payload)));
 	}
 
-	/* The peer should respond with factory_change_ack (submsg 12),
+	/* The peer should respond with factory_change_ack (submsg 8),
 	 * which will arrive via handle_peer_factory_message and get
-	 * forwarded to lightningd. The plugin coordinates the flow. */
+	 * forwarded to lightningd. The plugin coordinates the flow.
+	 *
+	 * Full factory change flow (bLIP-56):
+	 * 1. Plugin calls factory-change RPC → lightningd sends
+	 *    WIRE_CHANNELD_FACTORY_CHANGE_INIT → we send submsg 6
+	 * 2. Peer responds with submsg 8 (ack) → forwarded to plugin
+	 * 3. Both sides send submsg 10 (funding) with new txid → forwarded
+	 * 4. Both sides send commitment_signed for new funding outpoint
+	 *    (reuses splice inflight mechanism via channeld_add_inflight)
+	 * 5. Plugin signals ready → submsg 12 (continue) exchanged
+	 * 6. Plugin signals locked → submsg 14 (locked) exchanged
+	 * 7. lightningd updates funding outpoint in DB
+	 *
+	 * Steps 2-6 are handled by the generic factory_message passthrough.
+	 * The plugin orchestrates the state machine and uses factory-send
+	 * RPC to send each submessage at the right time.
+	 * commitment_signed reuses the splice inflight path.
+	 */
 }
 
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
@@ -6445,6 +6465,37 @@ static void handle_blockheight(struct peer *peer, const u8 *inmsg)
 
 	/* Save it, so we know */
 	peer->our_blockheight = blockheight;
+
+	/* bLIP-56: Check if any HTLCs are approaching timeout within
+	 * factory_early_warning_time. If so, notify lightningd which
+	 * will notify the factory plugin. */
+	if (peer->factory_early_warning_time > 0) {
+		const struct htlc_map *htlcs = &peer->channel->htlcs;
+		struct htlc_map_iter it;
+		const struct htlc *htlc;
+		for (htlc = htlc_map_first(htlcs, &it);
+		     htlc;
+		     htlc = htlc_map_next(htlcs, &it)) {
+			if (htlc->state == RCVD_ADD_ACK_REVOCATION
+			    && htlc->expiry.locktime <=
+			       blockheight + peer->factory_early_warning_time) {
+				status_info("bLIP-56: HTLC %"PRIu64" expiry %u "
+					    "within early warning (%u + %u)",
+					    htlc->id,
+					    htlc->expiry.locktime,
+					    blockheight,
+					    peer->factory_early_warning_time);
+				/* Notify lightningd via factory message */
+				wire_sync_write(MASTER_FD,
+					take(towire_channeld_factory_message_in(
+						NULL,
+						0xFFFF, /* special: HTLC early warning */
+						sizeof(htlc->id),
+						(u8 *)&htlc->id)));
+			}
+		}
+	}
+
 	if (peer->channel->opener == LOCAL)
 		start_commit_timer(peer);
 	else {
