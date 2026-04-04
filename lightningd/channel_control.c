@@ -290,6 +290,59 @@ static void handle_splice_feerate_error(struct lightningd *ld,
 	}
 }
 
+/* bLIP-56: Handle incoming factory protocol message from peer.
+ * Route to plugins via the custommsg hook infrastructure. */
+static void handle_factory_message_in(struct lightningd *ld,
+				      struct channel *channel,
+				      const u8 *msg)
+{
+	u16 factory_submessage_id;
+	u16 len;
+	u8 *data;
+
+	if (!fromwire_channeld_factory_message_in(tmpctx, msg,
+						  &factory_submessage_id,
+						  &len,
+						  &data)) {
+		channel_internal_error(channel,
+				       "bad fromwire_channeld_factory_message_in %s",
+				       tal_hex(channel, msg));
+		return;
+	}
+
+	log_info(channel->log,
+		 "Factory message from peer: submsg_id=%u len=%u",
+		 factory_submessage_id, len);
+
+	/* TODO: Route to factory plugin via a dedicated hook.
+	 * For now, log and drop. The plugin hook will be added
+	 * when the factory plugin interface is finalized. */
+}
+
+/* bLIP-56: Factory state change has locked (new funding outpoint). */
+static void handle_factory_change_locked(struct lightningd *ld,
+					 struct channel *channel,
+					 const u8 *msg)
+{
+	struct bitcoin_txid locked_funding_txid;
+
+	if (!fromwire_channeld_factory_change_locked(msg,
+						     &locked_funding_txid)) {
+		channel_internal_error(channel,
+				       "bad fromwire_channeld_factory_change_locked %s",
+				       tal_hex(channel, msg));
+		return;
+	}
+
+	log_info(channel->log,
+		 "Factory change locked: new funding txid %s",
+		 fmt_bitcoin_txid(tmpctx, &locked_funding_txid));
+
+	/* TODO: Update channel's funding outpoint to the new factory state.
+	 * This is equivalent to a splice completing — the channel's
+	 * funding transaction changes but the channel state carries over. */
+}
+
 static void handle_splice_abort(struct lightningd *ld,
 				struct channel *channel,
 				const u8 *msg)
@@ -1615,6 +1668,13 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_UPGRADED:
 		handle_channel_upgrade(sd->channel, msg);
 		break;
+	/* bLIP-56: factory message from peer via channeld */
+	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
+		handle_factory_message_in(sd->ld, sd->channel, msg);
+		break;
+	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
+		handle_factory_change_locked(sd->ld, sd->channel, msg);
+		break;
 	/* And we never get these from channeld. */
 	case WIRE_CHANNELD_INIT:
 	case WIRE_CHANNELD_FUNDING_DEPTH:
@@ -1644,6 +1704,8 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_STFU:
 	case WIRE_CHANNELD_DEV_QUIESCE_REPLY:
 	case WIRE_CHANNELD_ABORT:
+	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
+	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 		break;
 	}
 
