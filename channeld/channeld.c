@@ -612,6 +612,41 @@ static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
 					       data)));
 }
 
+/* bLIP-56: Handle factory state change initiation from lightningd.
+ * This triggers the STFU → factory_change flow, paralleling splice. */
+static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
+{
+	struct bitcoin_txid new_funding_txid;
+	u32 new_funding_outnum;
+
+	if (!fromwire_channeld_factory_change_init(msg,
+						   &new_funding_txid,
+						   &new_funding_outnum))
+		master_badmsg(WIRE_CHANNELD_FACTORY_CHANGE_INIT, msg);
+
+	status_info("Factory change init: new funding %s:%u",
+		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
+		    new_funding_outnum);
+
+	/* Send factory_change_init to peer as a factory submessage.
+	 * Submessage ID 10 = factory_change_init per bLIP-56. */
+	{
+		u8 *payload = tal_arr(tmpctx, u8, 0);
+		towire_bitcoin_txid(&payload, &new_funding_txid);
+		towire_u32(&payload, new_funding_outnum);
+
+		peer_write(peer->pps,
+			   take(towire_factory_message(NULL,
+						       10, /* factory_change_init */
+						       tal_bytelen(payload),
+						       payload)));
+	}
+
+	/* The peer should respond with factory_change_ack (submsg 12),
+	 * which will arrive via handle_peer_factory_message and get
+	 * forwarded to lightningd. The plugin coordinates the flow. */
+}
+
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
 {
 	struct channel_id chanid;
@@ -6790,9 +6825,12 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
 		handle_master_factory_message_out(peer, msg);
 		return;
+	/* bLIP-56: factory state change from lightningd */
+	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
+		handle_master_factory_change_init(peer, msg);
+		return;
 	/* bLIP-56: these are channeld->master only, not master->channeld */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
-	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
 		break;
 	case WIRE_CHANNELD_SPLICE_CONFIRMED_INIT:
