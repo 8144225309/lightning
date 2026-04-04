@@ -924,8 +924,7 @@ static bool handle_custommsg(struct daemon *daemon,
 	/* We log it, since it's not going to a subdaemon */
 	status_peer_io(LOG_IO_IN, &peer->id, msg);
 
-	/* Even unknown messages must be explicitly allowed.
-	 * bLIP-56: WIRE_FACTORY_MESSAGE is always accepted. */
+	/* Even unknown messages must be explicitly allowed */
 	if (type == WIRE_FACTORY_MESSAGE) {
 		/* Handled below via custommsg forwarding. */
 	} else if (type % 2 == 0 && !find_custom_msg(daemon->custom_msgs, type)) {

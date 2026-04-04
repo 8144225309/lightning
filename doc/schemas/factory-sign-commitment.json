@@ -1,0 +1,52 @@
+{
+  "$schema": "../rpc-schema-draft.json",
+  "type": "object",
+  "rpc": "factory-sign-commitment",
+  "title": "Sign a commitment for a new factory funding outpoint",
+  "description": [
+    "`factory-sign-commitment` tells the channel daemon to create and sign a commitment transaction spending a new factory funding outpoint. Called after both peers have exchanged `factory_change_funding` (submessage 10)."
+  ],
+  "request": {
+    "required": ["channel_id", "new_funding_txid", "new_funding_outnum", "new_funding_amount", "local_contribution", "remote_funding_pubkey"],
+    "additionalProperties": false,
+    "properties": {
+      "channel_id": {
+        "type": "hash",
+        "description": ["The factory channel."]
+      },
+      "new_funding_txid": {
+        "type": "txid",
+        "description": ["The new funding transaction ID."]
+      },
+      "new_funding_outnum": {
+        "type": "u32",
+        "description": ["The output index in the new funding transaction."]
+      },
+      "new_funding_amount": {
+        "type": "sat",
+        "description": ["The total amount of the new funding output."]
+      },
+      "local_contribution": {
+        "type": "s64",
+        "description": ["The local balance change in satoshis (positive adds, negative removes)."]
+      },
+      "remote_funding_pubkey": {
+        "type": "pubkey",
+        "description": ["The remote peer's funding pubkey for the new commitment."]
+      }
+    }
+  },
+  "response": {
+    "required": ["initiated"],
+    "properties": {
+      "initiated": {
+        "type": "boolean",
+        "description": ["Whether the commitment signing was initiated."]
+      }
+    }
+  },
+  "see_also": [
+    "lightning-factory-send(7)",
+    "lightning-factory-change(7)"
+  ]
+}

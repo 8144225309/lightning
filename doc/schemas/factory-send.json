@@ -1,0 +1,40 @@
+{
+  "$schema": "../rpc-schema-draft.json",
+  "type": "object",
+  "rpc": "factory-send",
+  "title": "Send a factory protocol message to a peer",
+  "description": [
+    "`factory-send` sends a bLIP-56 factory protocol message to the peer on the given channel. The message is delivered as a `factory_message` (type 32800) with the specified `submessage_id` and `data`."
+  ],
+  "request": {
+    "required": ["channel_id", "submessage_id", "data"],
+    "additionalProperties": false,
+    "properties": {
+      "channel_id": {
+        "type": "hash",
+        "description": ["The channel to send the factory message on."]
+      },
+      "submessage_id": {
+        "type": "u64",
+        "description": ["The factory submessage identifier."]
+      },
+      "data": {
+        "type": "hex",
+        "description": ["The factory message payload."]
+      }
+    }
+  },
+  "response": {
+    "required": ["sent"],
+    "properties": {
+      "sent": {
+        "type": "boolean",
+        "description": ["Whether the message was sent."]
+      }
+    }
+  },
+  "see_also": [
+    "lightning-factory-change(7)",
+    "lightning-factory-sign-commitment(7)"
+  ]
+}
