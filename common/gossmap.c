@@ -1972,6 +1972,7 @@ const void *gossmap_stream_next(const tal_t *ctx,
 		case WIRE_REPLY_CHANNEL_RANGE:
 		case WIRE_GOSSIP_TIMESTAMP_FILTER:
 		case WIRE_ONION_MESSAGE:
+	case WIRE_FACTORY_MESSAGE:
 			break;
 		}
 	}

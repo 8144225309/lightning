@@ -12,6 +12,8 @@
 #include <errno.h>
 #include <hsmd/permissions.h>
 #include <lightningd/channel.h>
+#include <lightningd/jsonrpc.h>
+#include <lightningd/plugin.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/channel_gossip.h>
 #include <lightningd/closing_control.h>
@@ -325,12 +327,10 @@ static void handle_factory_message_in(struct lightningd *ld,
 				      const u8 *msg)
 {
 	u16 factory_submessage_id;
-	u16 len;
 	u8 *data;
 
 	if (!fromwire_channeld_factory_message_in(tmpctx, msg,
 						  &factory_submessage_id,
-						  &len,
 						  &data)) {
 		channel_internal_error(channel,
 				       "bad fromwire_channeld_factory_message_in %s",
@@ -339,21 +339,21 @@ static void handle_factory_message_in(struct lightningd *ld,
 	}
 
 	log_debug(channel->log,
-		  "Factory message from peer: submsg_id=%u len=%u",
-		  factory_submessage_id, len);
+		  "Factory message from peer: submsg_id=%u len=%zu",
+		  factory_submessage_id, tal_bytelen(data));
 
-	/* Notify plugins via a JSON notification. The factory plugin
-	 * subscribes to "factory_message" and handles the protocol. */
+	/* Notify plugins via a JSON notification. */
 	{
-		struct json_stream *js;
-		js = plugin_notification_start(ld, "factory_message");
-		json_add_string(js, "channel_id",
+		struct jsonrpc_notification *n;
+		n = jsonrpc_notification_start(NULL, "factory_message");
+		json_add_string(n->stream, "channel_id",
 				fmt_channel_id(tmpctx, &channel->cid));
-		json_add_node_id(js, "peer_id", &channel->peer->id);
-		json_add_u32(js, "factory_submessage_id",
+		json_add_node_id(n->stream, "peer_id", &channel->peer->id);
+		json_add_u32(n->stream, "factory_submessage_id",
 			     factory_submessage_id);
-		json_add_hex(js, "data", data, len);
-		plugin_notification_end(ld, js);
+		json_add_hex_talarr(n->stream, "data", data);
+		jsonrpc_notification_end(n);
+		plugins_notify(ld->plugins, take(n));
 	}
 }
 
@@ -377,20 +377,20 @@ static void handle_factory_change_locked(struct lightningd *ld,
 		 "Factory change locked: new funding txid %s",
 		 fmt_bitcoin_txid(tmpctx, &locked_funding_txid));
 
-	/* Update the channel's funding outpoint. The output index
-	 * stays the same within the factory tree structure. */
+	/* Update the channel's funding outpoint. */
 	channel->funding.txid = locked_funding_txid;
 	wallet_channel_save(ld->wallet, channel);
 
-	/* Notify plugins that the factory state changed. */
+	/* Notify plugins. */
 	{
-		struct json_stream *js;
-		js = plugin_notification_start(ld, "factory_change_locked");
-		json_add_string(js, "channel_id",
+		struct jsonrpc_notification *n;
+		n = jsonrpc_notification_start(NULL, "factory_change_locked");
+		json_add_string(n->stream, "channel_id",
 				fmt_channel_id(tmpctx, &channel->cid));
-		json_add_txid(js, "locked_funding_txid",
+		json_add_txid(n->stream, "locked_funding_txid",
 			      &locked_funding_txid);
-		plugin_notification_end(ld, js);
+		jsonrpc_notification_end(n);
+		plugins_notify(ld->plugins, take(n));
 	}
 }
 
@@ -1785,6 +1785,8 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
+	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
+	case WIRE_CHANNELD_FACTORY_CHANGE_ABORT:
 		break;
 	}
 
@@ -2938,23 +2940,14 @@ static struct command_result *json_factory_send(struct command *cmd,
 
 	if (!param(cmd, buffer, params,
 		   p_req("channel_id", param_channel_id, &cid),
-		   p_req("submessage_id", param_u64, submsg_id),
+		   p_req("submessage_id", param_u64, &submsg_id),
 		   p_req("data", param_bin_from_hex, &data),
 		   NULL))
 		return command_param_failed();
 
-	channel = any_channel_by_scid(cmd->ld, NULL, false);
-	/* Find channel by channel_id */
-	struct peer *peer;
-	list_for_each(&cmd->ld->peers, peer, list) {
-		list_for_each(&peer->channels, channel, list) {
-			if (channel_id_eq(&channel->cid, cid))
-				goto found;
-		}
-	}
-	return command_fail(cmd, LIGHTNINGD, "Channel not found");
-
-found:
+	channel = channel_by_cid(cmd->ld, cid);
+	if (!channel)
+		return command_fail(cmd, LIGHTNINGD, "Channel not found");
 	if (!channel->owner)
 		return command_fail(cmd, LIGHTNINGD, "Channel not active");
 
@@ -2964,7 +2957,6 @@ found:
 	subd_send_msg(channel->owner,
 		      take(towire_channeld_factory_message_out(NULL,
 							       (u16)*submsg_id,
-							       tal_bytelen(data),
 							       data)));
 
 	struct json_stream *js = json_stream_success(cmd);
@@ -2992,22 +2984,14 @@ static struct command_result *json_factory_change(struct command *cmd,
 
 	if (!param(cmd, buffer, params,
 		   p_req("channel_id", param_channel_id, &cid),
-		   p_req("new_funding_txid", param_bitcoin_txid, &new_funding_txid),
+		   p_req("new_funding_txid", param_txid, &new_funding_txid),
 		   p_req("new_funding_outnum", param_number, &new_funding_outnum),
 		   NULL))
 		return command_param_failed();
 
-	/* Find channel by channel_id */
-	struct peer *peer;
-	list_for_each(&cmd->ld->peers, peer, list) {
-		list_for_each(&peer->channels, channel, list) {
-			if (channel_id_eq(&channel->cid, cid))
-				goto found;
-		}
-	}
-	return command_fail(cmd, LIGHTNINGD, "Channel not found");
-
-found:
+	channel = channel_by_cid(cmd->ld, cid);
+	if (!channel)
+		return command_fail(cmd, LIGHTNINGD, "Channel not found");
 	if (!channel->owner)
 		return command_fail(cmd, LIGHTNINGD, "Channel not active");
 
@@ -3047,7 +3031,7 @@ static struct command_result *json_factory_sign_commitment(struct command *cmd,
 
 	if (!param(cmd, buffer, params,
 		   p_req("channel_id", param_channel_id, &cid),
-		   p_req("new_funding_txid", param_bitcoin_txid, &new_funding_txid),
+		   p_req("new_funding_txid", param_txid, &new_funding_txid),
 		   p_req("new_funding_outnum", param_number, &new_funding_outnum),
 		   p_req("new_funding_amount", param_sat, &new_funding_amount),
 		   p_req("local_contribution", param_s64, &local_contribution),
@@ -3055,17 +3039,9 @@ static struct command_result *json_factory_sign_commitment(struct command *cmd,
 		   NULL))
 		return command_param_failed();
 
-	/* Find channel by channel_id */
-	struct peer *peer;
-	list_for_each(&cmd->ld->peers, peer, list) {
-		list_for_each(&peer->channels, channel, list) {
-			if (channel_id_eq(&channel->cid, cid))
-				goto found;
-		}
-	}
-	return command_fail(cmd, LIGHTNINGD, "Channel not found");
-
-found:
+	channel = channel_by_cid(cmd->ld, cid);
+	if (!channel)
+		return command_fail(cmd, LIGHTNINGD, "Channel not found");
 	if (!channel->owner)
 		return command_fail(cmd, LIGHTNINGD, "Channel not active");
 
