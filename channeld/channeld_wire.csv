@@ -333,6 +333,17 @@ msgdata,channeld_factory_sign_commitment,remote_funding_pubkey,pubkey,
 msgtype,channeld_factory_change_locked,7233
 msgdata,channeld_factory_change_locked,locked_funding_txid,bitcoin_txid,
 
+# bLIP-56: Plugin tells channeld the factory funding tx confirmed on-chain.
+# Transitions channel from factory-mode (0-conf) to normal confirmed mode.
+msgtype,channeld_factory_funding_confirmed,7235
+msgdata,channeld_factory_funding_confirmed,funding_txid,bitcoin_txid,
+msgdata,channeld_factory_funding_confirmed,funding_outnum,u32,
+msgdata,channeld_factory_funding_confirmed,depth,u32,
+
+# bLIP-56: Plugin tells channeld to abort a pending factory change.
+# Exits STFU and resumes normal channel operation.
+msgtype,channeld_factory_change_abort,7236
+
 # Tell peer to shut down channel.
 msgtype,channeld_send_shutdown,1023
 msgdata,channeld_send_shutdown,final_index,?u32,
