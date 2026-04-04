@@ -1328,6 +1328,9 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 	fc->inflight = false;
 	fc->funding_scriptpubkey = NULL;
 
+	u8 *factory_protocol_id_hex, *factory_instance_id_hex;
+	u64 *factory_early_warning;
+
 	if (!param_check(fc->cmd, buffer, params,
 			 p_req("id", param_node_id, &id),
 			 p_req("amount", param_sat, &amount),
@@ -1338,6 +1341,9 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 			 p_opt("mindepth", param_u32, &mindepth),
 			 p_opt("reserve", param_sat, &reserve),
 			 p_opt("channel_type", param_channel_type, &ctype),
+			 p_opt("factory_protocol_id", param_bin_from_hex, &factory_protocol_id_hex),
+			 p_opt("factory_instance_id", param_bin_from_hex, &factory_instance_id_hex),
+			 p_opt("factory_early_warning_time", param_u64, &factory_early_warning),
 			 NULL))
 		return command_param_failed();
 
@@ -1496,6 +1502,8 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 	temporary_channel_id(&tmp_channel_id);
 	{
 		u8 empty_id[32] = {0};
+		bool has_factory = (factory_protocol_id_hex != NULL
+				    && factory_instance_id_hex != NULL);
 		fc->open_msg = towire_openingd_funder_start(
 				fc,
 				*amount,
@@ -1508,10 +1516,11 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 				fc->channel_flags,
 				reserve,
 				fc->channel_type,
-				false, /* has_factory */
-				empty_id,
-				empty_id,
-				0);
+				has_factory,
+				has_factory ? factory_protocol_id_hex : empty_id,
+				has_factory ? factory_instance_id_hex : empty_id,
+				has_factory && factory_early_warning
+					? (u16)*factory_early_warning : 0);
 	}
 
 	if (!topology_synced(cmd->ld->topology)) {
