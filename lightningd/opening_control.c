@@ -388,6 +388,10 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	/* This is a new channel_info.their_config so set its ID to 0 */
 	channel_info.their_config.id = 0;
 
+	bool has_factory;
+	u8 factory_protocol_id[32], factory_instance_id[32];
+	u16 factory_early_warning_time;
+
 	if (!fromwire_openingd_funder_reply(resp, resp,
 					   &channel_info.their_config,
 					   &remote_commit,
@@ -404,7 +408,11 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 					   &feerate,
 					   &fc->uc->our_config.channel_reserve,
 					   &remote_upfront_shutdown_script,
-					   &type)) {
+					   &type,
+					   &has_factory,
+					   factory_protocol_id,
+					   factory_instance_id,
+					   &factory_early_warning_time)) {
 		log_broken(fc->uc->log,
 			   "bad OPENING_FUNDER_REPLY %s",
 			   tal_hex(resp, resp));
@@ -414,6 +422,12 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 		goto cleanup;
 	}
 	remote_commit->chainparams = chainparams;
+
+	/* bLIP-56: factory channels use 0 minimum depth (0-conf behavior) */
+	if (has_factory) {
+		fc->uc->minimum_depth = 0;
+		log_info(ld->log, "Channel is inside factory, using 0-conf");
+	}
 
 	peer_fd = new_peer_fd_arr(resp, fds);
 
@@ -501,6 +515,10 @@ static void opening_fundee_finished(struct subd *openingd,
 	channel_info.their_config.id = 0;
 
 	peer_fd = new_peer_fd_arr(tmpctx, fds);
+	bool has_factory;
+	u8 factory_protocol_id[32], factory_instance_id[32];
+	u16 factory_early_warning_time;
+
 	if (!fromwire_openingd_fundee(tmpctx, reply,
 				     &channel_info.their_config,
 				     &remote_commit,
@@ -521,7 +539,11 @@ static void opening_fundee_finished(struct subd *openingd,
 				     &uc->our_config.channel_reserve,
 				     &local_upfront_shutdown_script,
 				     &remote_upfront_shutdown_script,
-				     &type)) {
+				     &type,
+				     &has_factory,
+				     factory_protocol_id,
+				     factory_instance_id,
+				     &factory_early_warning_time)) {
 		log_broken(uc->log, "bad OPENING_FUNDEE_REPLY %s",
 			   tal_hex(reply, reply));
 		uncommitted_channel_disconnect(uc, LOG_BROKEN,
@@ -530,6 +552,12 @@ static void opening_fundee_finished(struct subd *openingd,
 	}
 
 	remote_commit->chainparams = chainparams;
+
+	/* bLIP-56: factory channels use 0 minimum depth */
+	if (has_factory) {
+		uc->minimum_depth = 0;
+		log_info(ld->log, "Fundee: channel is inside factory, using 0-conf");
+	}
 
 	derive_channel_id(&cid, &funding);
 
@@ -656,6 +684,12 @@ struct openchannel_hook_payload {
 	const u8 *our_upfront_shutdown_script;
 	struct channel_type *channel_type;
 	char *errmsg;
+
+	/* bLIP-56: factory info */
+	bool has_factory;
+	u8 factory_protocol_id[32];
+	u8 factory_instance_id[32];
+	u16 factory_early_warning_time;
 };
 
 static void openchannel_hook_serialize(struct openchannel_hook_payload *payload,
@@ -684,6 +718,16 @@ static void openchannel_hook_serialize(struct openchannel_hook_payload *payload,
 		json_add_hex_talarr(stream, "shutdown_scriptpubkey",
 				    payload->shutdown_scriptpubkey);
 	json_add_channel_type(stream, "channel_type", payload->channel_type);
+	if (payload->has_factory) {
+		json_object_start(stream, "channel_in_factory");
+		json_add_hex(stream, "factory_protocol_id",
+			     payload->factory_protocol_id, 32);
+		json_add_hex(stream, "factory_instance_id",
+			     payload->factory_instance_id, 32);
+		json_add_num(stream, "factory_early_warning_time",
+			     payload->factory_early_warning_time);
+		json_object_end(stream);
+	}
 	json_object_end(stream); /* .openchannel */
 }
 
@@ -864,7 +908,11 @@ static void opening_got_offer(struct subd *openingd,
 					&payload->max_accepted_htlcs,
 					&payload->channel_flags,
 					&payload->shutdown_scriptpubkey,
-					&payload->channel_type)) {
+					&payload->channel_type,
+					&payload->has_factory,
+					payload->factory_protocol_id,
+					payload->factory_instance_id,
+					&payload->factory_early_warning_time)) {
 		log_broken(openingd->log, "Malformed opening_got_offer %s",
 			   tal_hex(tmpctx, msg));
 		tal_free(openingd);
@@ -1460,18 +1508,25 @@ static struct command_result *json_fundchannel_start(struct command *cmd,
 		upfront_shutdown_script_wallet_index = NULL;
 
 	temporary_channel_id(&tmp_channel_id);
-	fc->open_msg = towire_openingd_funder_start(
-			fc,
-			*amount,
-			fc->push,
-			fc->our_upfront_shutdown_script,
-			upfront_shutdown_script_wallet_index,
-			*feerate_non_anchor,
-			feerate_anchor,
-			&tmp_channel_id,
-			fc->channel_flags,
-			reserve,
-			fc->channel_type);
+	{
+		u8 empty_id[32] = {0};
+		fc->open_msg = towire_openingd_funder_start(
+				fc,
+				*amount,
+				fc->push,
+				fc->our_upfront_shutdown_script,
+				upfront_shutdown_script_wallet_index,
+				*feerate_non_anchor,
+				feerate_anchor,
+				&tmp_channel_id,
+				fc->channel_flags,
+				reserve,
+				fc->channel_type,
+				false, /* has_factory */
+				empty_id,
+				empty_id,
+				0);
+	}
 
 	if (!topology_synced(cmd->ld->topology)) {
 		struct fundchannel_start_info *info
