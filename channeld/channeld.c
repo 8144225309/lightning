@@ -572,12 +572,10 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
 static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 {
 	u16 factory_submessage_id;
-	u16 len;
 	u8 *data;
 
 	if (!fromwire_factory_message(tmpctx, msg,
 				      &factory_submessage_id,
-				      &len,
 				      &data))
 		peer_failed_warn(peer->pps, &peer->channel_id,
 				 "Bad factory_message %s",
@@ -586,7 +584,6 @@ static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 	wire_sync_write(MASTER_FD,
 			take(towire_channeld_factory_message_in(NULL,
 								factory_submessage_id,
-								len,
 								data)));
 }
 
@@ -594,19 +591,16 @@ static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
 {
 	u16 factory_submessage_id;
-	u16 len;
 	u8 *data;
 
 	if (!fromwire_channeld_factory_message_out(tmpctx, msg,
 						   &factory_submessage_id,
-						   &len,
 						   &data))
 		master_badmsg(WIRE_CHANNELD_FACTORY_MESSAGE_OUT, msg);
 
 	peer_write(peer->pps,
 		   take(towire_factory_message(NULL,
 					       factory_submessage_id,
-					       len,
 					       data)));
 }
 
@@ -653,11 +647,14 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 	 * the splice commitment signing logic into a shared function
 	 * that both splice and factory changes can call.
 	 */
-	wire_sync_write(MASTER_FD,
-			take(towire_channeld_factory_message_in(NULL,
-				0xFFFE, /* special: commitment sign request */
-				sizeof(new_funding_txid),
-				(u8 *)&new_funding_txid)));
+	{
+		u8 *txid_data = tal_dup_arr(tmpctx, u8,
+					    (u8 *)&new_funding_txid,
+					    sizeof(new_funding_txid), 0);
+		wire_sync_write(MASTER_FD,
+				take(towire_channeld_factory_message_in(NULL,
+					0xFFFE, txid_data)));
+	}
 }
 
 /* bLIP-56: Factory funding tx confirmed on-chain (dissolution). */
@@ -697,7 +694,6 @@ static void handle_master_factory_change_abort(struct peer *peer,
 		peer_write(peer->pps,
 			   take(towire_factory_message(NULL,
 						       16,
-						       0,
 						       empty)));
 	}
 }
@@ -726,7 +722,6 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 		peer_write(peer->pps,
 			   take(towire_factory_message(NULL,
 						       FACTORY_SUBMSG_CHANGE_INIT,
-						       tal_bytelen(payload),
 						       payload)));
 	}
 
@@ -6556,35 +6551,9 @@ static void handle_blockheight(struct peer *peer, const u8 *inmsg)
 	/* Save it, so we know */
 	peer->our_blockheight = blockheight;
 
-	/* bLIP-56: Check if any HTLCs are approaching timeout within
-	 * factory_early_warning_time. If so, notify lightningd which
-	 * will notify the factory plugin. */
-	if (peer->factory_early_warning_time > 0) {
-		const struct htlc_map *htlcs = &peer->channel->htlcs;
-		struct htlc_map_iter it;
-		const struct htlc *htlc;
-		for (htlc = htlc_map_first(htlcs, &it);
-		     htlc;
-		     htlc = htlc_map_next(htlcs, &it)) {
-			if (htlc->state == RCVD_ADD_ACK_REVOCATION
-			    && htlc->expiry.locktime <=
-			       blockheight + peer->factory_early_warning_time) {
-				status_info("bLIP-56: HTLC %"PRIu64" expiry %u "
-					    "within early warning (%u + %u)",
-					    htlc->id,
-					    htlc->expiry.locktime,
-					    blockheight,
-					    peer->factory_early_warning_time);
-				/* Notify lightningd via factory message */
-				wire_sync_write(MASTER_FD,
-					take(towire_channeld_factory_message_in(
-						NULL,
-						0xFFFF, /* special: HTLC early warning */
-						sizeof(htlc->id),
-						(u8 *)&htlc->id)));
-			}
-		}
-	}
+	/* bLIP-56: HTLC early warning.
+	 * The plugin monitors HTLC timeouts via listhtlcs RPC and
+	 * factory_early_warning_time from the channel open. */
 
 	if (peer->channel->opener == LOCAL)
 		start_commit_timer(peer);
