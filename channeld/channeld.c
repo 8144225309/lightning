@@ -633,38 +633,6 @@ static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
 					       data)));
 }
 
-/* bLIP-56: Handle factory state change initiation from lightningd.
- * This triggers the STFU → factory_change flow, paralleling splice. */
-static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
-{
-	struct bitcoin_txid new_funding_txid;
-	u32 new_funding_outnum;
-
-	if (!fromwire_channeld_factory_change_init(msg,
-						   &new_funding_txid,
-						   &new_funding_outnum))
-		master_badmsg(WIRE_CHANNELD_FACTORY_CHANGE_INIT, msg);
-
-	status_info("Factory change init: new funding %s:%u",
-		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
-		    new_funding_outnum);
-
-	/* Send factory_change_init to peer as a factory submessage.
-	 * Submessage ID 6 = factory_change_init per bLIP-56. */
-	{
-		u8 *payload = tal_arr(tmpctx, u8, 0);
-		towire_bitcoin_txid(&payload, &new_funding_txid);
-		towire_u32(&payload, new_funding_outnum);
-
-		peer_write(peer->pps,
-			   take(towire_factory_message(NULL,
-						       FACTORY_SUBMSG_CHANGE_INIT,
-						       tal_bytelen(payload),
-						       payload)));
-	}
-
-}
-
 /* bLIP-56: Sign a commitment transaction for a new factory funding outpoint.
  * This is called after factory_change_funding (submsg 10) has been exchanged
  * and both sides agree on the new funding txid. The plugin triggers this
@@ -713,6 +681,48 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 				0xFFFE, /* special: commitment sign request */
 				sizeof(new_funding_txid),
 				(u8 *)&new_funding_txid)));
+}
+
+/* bLIP-56: Factory funding tx confirmed on-chain (dissolution). */
+static void handle_master_factory_funding_confirmed(struct peer *peer,
+						    const u8 *msg)
+{
+	struct bitcoin_txid funding_txid;
+	u32 funding_outnum, depth;
+
+	if (!fromwire_channeld_factory_funding_confirmed(msg,
+							 &funding_txid,
+							 &funding_outnum,
+							 &depth))
+		master_badmsg(WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED, msg);
+
+	status_info("Factory funding confirmed on-chain: %s:%u depth=%u",
+		    fmt_bitcoin_txid(tmpctx, &funding_txid),
+		    funding_outnum, depth);
+
+	/* Channel transitions from factory-mode to normal confirmed mode.
+	 * Existing penalty/breach logic applies from here. */
+	peer->factory_early_warning_time = 0;
+}
+
+/* bLIP-56: Abort a pending factory state change. */
+static void handle_master_factory_change_abort(struct peer *peer,
+					       const u8 *msg)
+{
+	if (!fromwire_channeld_factory_change_abort(msg))
+		master_badmsg(WIRE_CHANNELD_FACTORY_CHANGE_ABORT, msg);
+
+	status_info("Factory change aborted, resuming channel");
+
+	/* Notify peer of abort (submsg 16). */
+	{
+		u8 *empty = tal_arr(tmpctx, u8, 0);
+		peer_write(peer->pps,
+			   take(towire_factory_message(NULL,
+						       16,
+						       0,
+						       empty)));
+	}
 }
 
 static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
@@ -6981,6 +6991,14 @@ static void req_in(struct peer *peer, const u8 *msg)
 	/* bLIP-56: sign commitment for new factory funding outpoint */
 	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
 		handle_master_factory_sign_commitment(peer, msg);
+		return;
+	/* bLIP-56: factory funding confirmed on-chain (dissolution) */
+	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
+		handle_master_factory_funding_confirmed(peer, msg);
+		return;
+	/* bLIP-56: abort pending factory change */
+	case WIRE_CHANNELD_FACTORY_CHANGE_ABORT:
+		handle_master_factory_change_abort(peer, msg);
 		return;
 	/* bLIP-56: these are channeld->master only, not master->channeld */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
