@@ -663,6 +663,86 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 						       payload)));
 	}
 
+}
+
+/* bLIP-56: Sign a commitment transaction for a new factory funding outpoint.
+ * This is called after factory_change_funding (submsg 10) has been exchanged
+ * and both sides agree on the new funding txid. The plugin triggers this
+ * via the factory-sign-commitment RPC. */
+static void handle_master_factory_sign_commitment(struct peer *peer,
+						  const u8 *msg)
+{
+	struct bitcoin_txid new_funding_txid;
+	u32 new_funding_outnum;
+	struct amount_sat new_funding_amount;
+	s64 local_funding_contribution;
+	struct pubkey remote_funding_pubkey;
+
+	if (!fromwire_channeld_factory_sign_commitment(msg,
+						       &new_funding_txid,
+						       &new_funding_outnum,
+						       &new_funding_amount,
+						       &local_funding_contribution,
+						       &remote_funding_pubkey))
+		master_badmsg(WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT, msg);
+
+	status_info("Factory sign commitment: new funding %s:%u amount=%s contrib=%"PRId64,
+		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
+		    new_funding_outnum,
+		    fmt_amount_sat(tmpctx, new_funding_amount),
+		    local_funding_contribution);
+
+	/* TODO: The full implementation needs to:
+	 * 1. Create a new funding outpoint from the txid/outnum
+	 * 2. Compute new channel balances (add contributions)
+	 * 3. Create commitment tx spending the new funding
+	 * 4. Sign it via HSMD
+	 * 5. Send commitment_signed to peer
+	 * 6. Receive peer's commitment_signed
+	 * 7. Add as inflight (reuse splice inflight tracking)
+	 *
+	 * For now, this records the intent and notifies lightningd.
+	 * The actual signing requires deep integration with the
+	 * commitment tx builder, which is the same code path used
+	 * by splice. A production implementation should factor out
+	 * the splice commitment signing logic into a shared function
+	 * that both splice and factory changes can call.
+	 */
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_factory_message_in(NULL,
+				0xFFFE, /* special: commitment sign request */
+				sizeof(new_funding_txid),
+				(u8 *)&new_funding_txid)));
+}
+
+static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
+{
+	struct bitcoin_txid new_funding_txid;
+	u32 new_funding_outnum;
+
+	if (!fromwire_channeld_factory_change_init(msg,
+						   &new_funding_txid,
+						   &new_funding_outnum))
+		master_badmsg(WIRE_CHANNELD_FACTORY_CHANGE_INIT, msg);
+
+	status_info("Factory change init: new funding %s:%u",
+		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
+		    new_funding_outnum);
+
+	/* Send factory_change_init to peer as a factory submessage.
+	 * Submessage ID 6 = factory_change_init per bLIP-56. */
+	{
+		u8 *payload = tal_arr(tmpctx, u8, 0);
+		towire_bitcoin_txid(&payload, &new_funding_txid);
+		towire_u32(&payload, new_funding_outnum);
+
+		peer_write(peer->pps,
+			   take(towire_factory_message(NULL,
+						       FACTORY_SUBMSG_CHANGE_INIT,
+						       tal_bytelen(payload),
+						       payload)));
+	}
+
 	/* The peer should respond with factory_change_ack (submsg 8),
 	 * which will arrive via handle_peer_factory_message and get
 	 * forwarded to lightningd. The plugin coordinates the flow.
@@ -6897,6 +6977,10 @@ static void req_in(struct peer *peer, const u8 *msg)
 	/* bLIP-56: factory state change from lightningd */
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 		handle_master_factory_change_init(peer, msg);
+		return;
+	/* bLIP-56: sign commitment for new factory funding outpoint */
+	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
+		handle_master_factory_sign_commitment(peer, msg);
 		return;
 	/* bLIP-56: these are channeld->master only, not master->channeld */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:

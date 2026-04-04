@@ -1784,6 +1784,7 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_ABORT:
 	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
+	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
 		break;
 	}
 
@@ -3028,3 +3029,64 @@ static const struct json_command factory_change_command = {
 	json_factory_change,
 };
 AUTODATA(json_command, &factory_change_command);
+
+/* bLIP-56: RPC to sign a commitment for a new factory funding outpoint.
+ * Called by the plugin after factory_change_funding (submsg 10) exchange. */
+static struct command_result *json_factory_sign_commitment(struct command *cmd,
+							   const char *buffer,
+							   const jsmntok_t *obj UNNEEDED,
+							   const jsmntok_t *params)
+{
+	struct channel_id *cid;
+	struct bitcoin_txid *new_funding_txid;
+	u32 *new_funding_outnum;
+	struct amount_sat *new_funding_amount;
+	s64 *local_contribution;
+	struct pubkey *remote_funding_pubkey;
+	struct channel *channel;
+
+	if (!param(cmd, buffer, params,
+		   p_req("channel_id", param_channel_id, &cid),
+		   p_req("new_funding_txid", param_bitcoin_txid, &new_funding_txid),
+		   p_req("new_funding_outnum", param_number, &new_funding_outnum),
+		   p_req("new_funding_amount", param_sat, &new_funding_amount),
+		   p_req("local_contribution", param_s64, &local_contribution),
+		   p_req("remote_funding_pubkey", param_pubkey, &remote_funding_pubkey),
+		   NULL))
+		return command_param_failed();
+
+	/* Find channel by channel_id */
+	struct peer *peer;
+	list_for_each(&cmd->ld->peers, peer, list) {
+		list_for_each(&peer->channels, channel, list) {
+			if (channel_id_eq(&channel->cid, cid))
+				goto found;
+		}
+	}
+	return command_fail(cmd, LIGHTNINGD, "Channel not found");
+
+found:
+	if (!channel->owner)
+		return command_fail(cmd, LIGHTNINGD, "Channel not active");
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	subd_send_msg(channel->owner,
+		      take(towire_channeld_factory_sign_commitment(NULL,
+								   new_funding_txid,
+								   *new_funding_outnum,
+								   *new_funding_amount,
+								   *local_contribution,
+								   remote_funding_pubkey)));
+
+	struct json_stream *js = json_stream_success(cmd);
+	json_add_bool(js, "initiated", true);
+	return command_success(cmd, js);
+}
+
+static const struct json_command factory_sign_commitment_command = {
+	"factory-sign-commitment",
+	json_factory_sign_commitment,
+};
+AUTODATA(json_command, &factory_sign_commitment_command);
