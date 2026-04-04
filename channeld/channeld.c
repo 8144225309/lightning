@@ -547,6 +547,24 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
 	implied_peer_splice_locked(peer, splice_txid);
 }
 
+/* bLIP-56: Factory submessage IDs per spec.
+ * All carried inside factory_message (32800) with factory_submessage_id field.
+ *
+ * Factory change flow:
+ *   1. Enter STFU (quiescence)
+ *   2. factory_change_init (6) — initiator proposes change
+ *   3. factory_change_ack (8) — responder acknowledges
+ *   4. factory_change_funding (10) — both exchange new funding txid
+ *   5. commitment_signed — sign commitment for new funding outpoint
+ *   6. factory_change_continue (12) — plugin made new state valid, resume
+ *   7. factory_change_locked (14) — old state invalidated, new state locked
+ */
+#define FACTORY_SUBMSG_CHANGE_INIT	6
+#define FACTORY_SUBMSG_CHANGE_ACK	8
+#define FACTORY_SUBMSG_CHANGE_FUNDING	10
+#define FACTORY_SUBMSG_CHANGE_CONTINUE	12
+#define FACTORY_SUBMSG_CHANGE_LOCKED	14
+
 /* bLIP-56: Forward factory protocol message from peer to lightningd */
 static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 {
@@ -606,7 +624,7 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 		    new_funding_outnum);
 
 	/* Send factory_change_init to peer as a factory submessage.
-	 * Submessage ID 10 = factory_change_init per bLIP-56. */
+	 * Submessage ID 6 = factory_change_init per bLIP-56. */
 	{
 		u8 *payload = tal_arr(tmpctx, u8, 0);
 		towire_bitcoin_txid(&payload, &new_funding_txid);
@@ -614,7 +632,7 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 
 		peer_write(peer->pps,
 			   take(towire_factory_message(NULL,
-						       10, /* factory_change_init */
+						       FACTORY_SUBMSG_CHANGE_INIT,
 						       tal_bytelen(payload),
 						       payload)));
 	}
