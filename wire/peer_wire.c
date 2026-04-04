@@ -139,8 +139,9 @@ bool peer_wire_is_internal(enum peer_wire type)
 	if (!peer_wire_is_defined(type))
 		return false;
 
-	/* handled by pluigns */
-	if (type == WIRE_PEER_STORAGE || type == WIRE_PEER_STORAGE_RETRIEVAL)
+	/* handled by plugins */
+	if (type == WIRE_PEER_STORAGE || type == WIRE_PEER_STORAGE_RETRIEVAL
+	    || type == WIRE_FACTORY_MESSAGE)
 		return false;
 
 	return true;
