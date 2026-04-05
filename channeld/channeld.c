@@ -592,6 +592,22 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
  *   6. factory_change_continue (12) — plugin made new state valid, resume
  *   7. factory_change_locked (14) — old state invalidated, new state locked
  */
+/* Forward declarations for factory_change to use splice helpers */
+static u8 *send_commit_part(const tal_t *ctx, struct peer *peer,
+			    const struct bitcoin_outpoint *funding,
+			    struct amount_sat funding_sats,
+			    const struct htlc **changed_htlcs,
+			    bool notify_master, s64 splice_amnt,
+			    s64 remote_splice_amnt, u64 remote_index,
+			    const struct pubkey *remote_per_commit,
+			    struct local_anchor_info **anchor,
+			    u16 batch_size, struct pubkey remote_funding_pubkey);
+static s64 sats_diff(struct amount_sat a, struct amount_sat b);
+static void update_hsmd_with_splice(struct peer *peer,
+				    struct inflight *inflight,
+				    const enum tx_role our_role,
+				    const struct amount_msat push_val);
+
 #define FACTORY_SUBMSG_CHANGE_INIT	6
 #define FACTORY_SUBMSG_CHANGE_ACK	8
 #define FACTORY_SUBMSG_CHANGE_FUNDING	10
