@@ -167,6 +167,13 @@ struct peer {
 	struct splice_state *splice_state;
 	struct splicing *splicing;
 
+	/* Pending factory change state */
+	struct bitcoin_outpoint pending_factory_outpoint;
+	struct amount_sat pending_factory_amount;
+	s64 pending_factory_contribution;
+	struct pubkey pending_factory_remote_funding;
+	bool factory_change_active;
+
 	/* If set, don't fire commit counter when this hits 0 */
 	u32 *dev_disable_commit;
 
@@ -628,7 +635,8 @@ static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
 }
 
 /* Sign commitment tx for a new factory funding outpoint.
- * Called after factory_change_funding (submsg 10) exchange. */
+ * Called after factory_change_funding (submsg 10) exchange.
+ * Reuses splice's inflight tracking and commitment signing. */
 static void handle_master_factory_sign_commitment(struct peer *peer,
 						  const u8 *msg)
 {
@@ -637,6 +645,8 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 	struct amount_sat new_funding_amount;
 	s64 local_funding_contribution;
 	struct pubkey remote_funding_pubkey;
+	struct inflight *inf;
+	struct local_anchor_info *local_anchor = NULL;
 
 	if (!fromwire_channeld_factory_sign_commitment(msg,
 						       &new_funding_txid,
@@ -652,30 +662,73 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 		    fmt_amount_sat(tmpctx, new_funding_amount),
 		    local_funding_contribution);
 
-	/* TODO: The full implementation needs to:
-	 * 1. Create a new funding outpoint from the txid/outnum
-	 * 2. Compute new channel balances (add contributions)
-	 * 3. Create commitment tx spending the new funding
-	 * 4. Sign it via HSMD
-	 * 5. Send commitment_signed to peer
-	 * 6. Receive peer's commitment_signed
-	 * 7. Add as inflight (reuse splice inflight tracking)
-	 *
-	 * For now, this records the intent and notifies lightningd.
-	 * The actual signing requires deep integration with the
-	 * commitment tx builder, which is the same code path used
-	 * by splice. A production implementation should factor out
-	 * the splice commitment signing logic into a shared function
-	 * that both splice and factory changes can call.
-	 */
+	/* 1. Create inflight entry (reuses splice inflight tracking) */
+	inf = tal(peer->splice_state, struct inflight);
+	inf->outpoint.txid = new_funding_txid;
+	inf->outpoint.n = new_funding_outnum;
+	inf->amnt = new_funding_amount;
+	inf->splice_amnt = local_funding_contribution;
+	inf->remote_funding = remote_funding_pubkey;
+	inf->psbt = create_psbt(inf, 0, 0, 0);
+	inf->i_am_initiator = true;
+	inf->force_sign_first = true;
+	inf->remote_tx_sigs = false;
+	inf->last_tx = NULL;
+	inf->locked_scid = NULL;
+	inf->i_sent_sigs = false;
+	tal_arr_expand(&peer->splice_state->inflights, inf);
+
+	/* 2. Notify HSMD about new funding outpoint */
+	update_hsmd_with_splice(peer, inf, TX_INITIATOR, AMOUNT_MSAT(0));
+
+	/* 3-5. Build, sign, and send commitment_signed for new outpoint */
 	{
-		u8 *txid_data = tal_dup_arr(tmpctx, u8,
-					    (u8 *)&new_funding_txid,
-					    sizeof(new_funding_txid), 0);
-		wire_sync_write(MASTER_FD,
-				take(towire_channeld_factory_message_in(NULL,
-					0xFFFE, txid_data)));
+		s64 funding_diff = sats_diff(inf->amnt,
+					     peer->channel->funding_sats);
+		s64 remote_splice_amnt = funding_diff - inf->splice_amnt;
+
+		u8 *commit_msg = send_commit_part(tmpctx, peer,
+						  &inf->outpoint,
+						  inf->amnt,
+						  NULL, false,
+						  inf->splice_amnt,
+						  remote_splice_amnt,
+						  peer->next_index[REMOTE] - 1,
+						  &peer->old_remote_per_commit,
+						  &local_anchor, 1,
+						  inf->remote_funding);
+
+		peer_write(peer->pps, take(commit_msg));
+		status_info("Factory: sent commitment_signed for new outpoint");
 	}
+
+	/* Notify master that commitment was signed.
+	 * Master will coordinate factory_change_continue/locked
+	 * via the plugin. */
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_factory_change_locked(NULL,
+				&new_funding_txid)));
+
+	status_info("Factory: commitment signed, sent factory_change_locked");
+}
+
+/* STFU callback for factory change: send factory_change_init after quiescence */
+static void handle_factory_stfu_success(struct peer *peer)
+{
+	/* factory_message is not in VALID_STFU_MESSAGE, so clear the gate
+	 * before peer responds with factory_change_ack */
+	peer->stfu_wait_single_msg = false;
+
+	u8 *payload = tal_arr(tmpctx, u8, 0);
+	towire_bitcoin_txid(&payload, &peer->pending_factory_outpoint.txid);
+	towire_u32(&payload, peer->pending_factory_outpoint.n);
+
+	peer_write(peer->pps,
+		   take(towire_factory_message(NULL,
+					       FACTORY_SUBMSG_CHANGE_INIT,
+					       payload)));
+
+	status_info("Factory change: sent factory_change_init after STFU");
 }
 
 static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
@@ -688,28 +741,34 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 						   &new_funding_outnum))
 		master_badmsg(WIRE_CHANNELD_FACTORY_CHANGE_INIT, msg);
 
+	/* Guard: reject if already in STFU, splice, or factory change */
+	if (peer->want_stfu || is_stfu_active(peer)) {
+		status_unusual("Factory change rejected: STFU already active");
+		return;
+	}
+	if (peer->splicing) {
+		status_unusual("Factory change rejected: splice in progress");
+		return;
+	}
+	if (peer->factory_change_active) {
+		status_unusual("Factory change rejected: already active");
+		return;
+	}
+
 	status_info("Factory change init: new funding %s:%u",
 		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
 		    new_funding_outnum);
 
-	/* Send factory_change_init to peer as a factory submessage.
-	 * Submessage ID 6 = factory_change_init per bLIP-56. */
-	{
-		u8 *payload = tal_arr(tmpctx, u8, 0);
-		towire_bitcoin_txid(&payload, &new_funding_txid);
-		towire_u32(&payload, new_funding_outnum);
+	/* Store pending factory change state */
+	peer->pending_factory_outpoint.txid = new_funding_txid;
+	peer->pending_factory_outpoint.n = new_funding_outnum;
+	peer->factory_change_active = true;
 
-		peer_write(peer->pps,
-			   take(towire_factory_message(NULL,
-						       FACTORY_SUBMSG_CHANGE_INIT,
-						       payload)));
-	}
-
-	/* Peer responds with factory_change_ack (submsg 8) via
-	 * handle_peer_factory_message → forwarded to plugin.
-	 *
-	 * NOTE: bLIP-56 requires STFU quiescence before factory changes.
-	 * Not yet implemented — needs splice STFU code factoring. */
+	/* Enter STFU quiescence before sending factory_change_init */
+	peer->on_stfu_success = handle_factory_stfu_success;
+	peer->stfu_initiator = LOCAL;
+	peer->want_stfu = true;
+	maybe_send_stfu(peer);
 }
 
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
@@ -7188,6 +7247,7 @@ int main(int argc, char *argv[])
 	peer->update_queue = msg_queue_new(peer, false);
 	peer->splice_state = splice_state_new(peer);
 	peer->splicing = NULL;
+	peer->factory_change_active = false;
 
 	/* Prepare the ecdh() function for use */
 	ecdh_hsmd_setup(HSM_FD, status_failed);
