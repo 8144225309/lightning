@@ -1145,6 +1145,18 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	 */
 	accept_tlvs->channel_type = state->channel_type->features;
 
+	/* Echo back channel_in_factory TLV if present in open_channel */
+	if (open_tlvs->channel_in_factory) {
+		accept_tlvs->channel_in_factory = tal(accept_tlvs,
+			struct tlv_accept_channel_tlvs_channel_in_factory);
+		memcpy(accept_tlvs->channel_in_factory->factory_protocol_id,
+		       open_tlvs->channel_in_factory->factory_protocol_id, 32);
+		memcpy(accept_tlvs->channel_in_factory->factory_instance_id,
+		       open_tlvs->channel_in_factory->factory_instance_id, 32);
+		accept_tlvs->channel_in_factory->factory_early_warning_time =
+			open_tlvs->channel_in_factory->factory_early_warning_time;
+	}
+
 	msg = towire_accept_channel(NULL, &state->channel_id,
 				    state->localconf.dust_limit,
 				    state->localconf.max_htlc_value_in_flight,
