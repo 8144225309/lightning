@@ -702,6 +702,9 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 			take(towire_channeld_factory_change_locked(NULL,
 				&new_funding_txid)));
 
+	/* Factory change complete — allow future changes */
+	peer->factory_change_active = false;
+
 	status_info("Factory: commitment signed, sent factory_change_locked");
 }
 
