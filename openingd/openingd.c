@@ -957,13 +957,6 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 		return NULL;
 	}
 
-	/* Factory channels bypass the zeroconf allowlist — the factory
-	 * protocol itself provides the trust relationship. */
-	if (open_tlvs->channel_in_factory) {
-		state->minimum_depth = 0;
-		status_info("Factory channel: setting minimum_depth=0 (bypass allowlist)");
-	}
-
 	/* BOLT #2:
 	 *
 	 * The receiving node MUST fail the channel if:
@@ -1107,6 +1100,15 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 		negotiation_failed(state, "%s", err_reason);
 		tal_free(err_reason);
 		return NULL;
+	}
+
+	/* Factory channels bypass the zeroconf allowlist — the factory
+	 * protocol itself provides the trust relationship.
+	 * Must override minimum_depth here because the hook reply
+	 * may have reset it to the node's default. */
+	if (open_tlvs->channel_in_factory) {
+		state->minimum_depth = 0;
+		status_info("Factory channel (fundee): minimum_depth forced to 0");
 	}
 
 	/* BOLT #2:
