@@ -1,3 +1,87 @@
+# Core Lightning — bLIP-56 (Pluggable Channel Factories)
+
+This is a fork of [Core Lightning](https://github.com/ElementsProject/lightning) that implements [bLIP-56](https://github.com/lightning/blips/pull/56) — a protocol extension enabling pluggable channel factories. It provides the wire-level plumbing that allows plugins like [superscalar-cln](https://github.com/8144225309/superscalar-cln) to manage factory lifecycles without requiring changes to CLN's core channel logic.
+
+This fork is based on **CLN v25.12**. The bLIP-56 changes live on the [`blip-56`](https://github.com/8144225309/lightning/tree/blip-56) branch.
+
+## What bLIP-56 Adds
+
+### New Peer Wire Message
+
+- **`factory_message` (type 32800)** — A single envelope message carrying a `factory_submessage_id` (u16) and variable-length `data`. All factory protocol traffic is multiplexed through submessage IDs inside this envelope, avoiding pollution of the BOLT message space.
+
+### New TLV on Channel Open
+
+- **`channel_in_factory` (TLV 65600)** on `open_channel` and `accept_channel` — Contains `factory_protocol_id` (32 bytes), `factory_instance_id` (32 bytes), and `factory_early_warning_time` (u16). When present, CLN automatically:
+  - Enforces zero-conf (`minimum_depth=0`) since factory channel funding outputs are off-chain
+  - Skips `channel_watch_funding` (no on-chain UTXO to monitor)
+  - Includes factory metadata in the `openchannel` hook for plugin approval
+
+### New Feature Bit
+
+- **`OPT_PLUGGABLE_CHANNEL_FACTORIES` (bit 270/271)** — Advertised in `init` messages so peers can discover factory support.
+
+### New JSON-RPC Commands
+
+| Command | Purpose |
+|---------|---------|
+| `factory-send` | Send a bLIP-56 `factory_message` to a peer on a given channel |
+| `factory-change` | Initiate a factory state change — triggers STFU (quiescence), then exchanges `factory_change_init`/`ack`/`funding` submessages, and re-signs commitment transactions for the new funding outpoint using splice infrastructure |
+| `factory-sign-commitment` | Sign a commitment transaction against a new factory funding outpoint |
+
+### Internal Wire Messages (channeld <-> lightningd)
+
+Seven new message types (IDs 7230–7236) for factory message forwarding, state change coordination, commitment signing, funding confirmation, and change abort.
+
+## Design Principles
+
+1. **Plugin-driven**: CLN core only provides plumbing. All factory-specific logic (tree construction, MuSig2 signing, state management) lives in plugins.
+2. **Single envelope**: One wire message type (32800) carries all factory traffic via submessage IDs.
+3. **Reuse existing infrastructure**: Factory state changes reuse the STFU + splice commitment signing path rather than introducing a parallel mechanism.
+4. **Standard submessage IDs**: Discovery (2=`supported_protocols`, 4=`piggyback`) and state changes (6=`change_init`, 8=`change_ack`, 10=`change_funding`, 12=`change_continue`, 14=`change_locked`).
+
+## Building
+
+```bash
+git clone --branch blip-56 https://github.com/8144225309/lightning.git
+cd lightning
+./configure
+make -j$(nproc)
+```
+
+Standard CLN build requirements apply. See the [upstream installation docs](https://docs.corelightning.org/docs) for platform-specific dependencies.
+
+## Running with the SuperScalar Plugin
+
+```bash
+# Build the superscalar-cln plugin (see its README for details)
+cp /path/to/superscalar-cln/superscalar.c plugins/
+make plugins/superscalar
+
+# Start lightningd with the plugin
+lightningd --network=regtest --plugin=plugins/superscalar
+```
+
+## Files Changed vs Upstream
+
+| File | Changes |
+|------|---------|
+| `wire/peer_wire.csv` | Added `factory_message` (type 32800) |
+| `wire/peer_wire.c` | Route `WIRE_FACTORY_MESSAGE` through custommsg path |
+| `common/features.h` | Added `OPT_PLUGGABLE_CHANNEL_FACTORIES` (bit 270/271) |
+| `channeld/channeld_wire.csv` | 7 new internal wire messages (IDs 7230–7236) |
+| `channeld/channeld.c` | Factory message pass-through, STFU-gated factory_change flow, commitment signing |
+| `lightningd/channel_control.c` | `factory-send`, `factory-change`, `factory-sign-commitment` RPC handlers |
+| `openingd/openingd.c` | `channel_in_factory` TLV encoding/validation, zeroconf enforcement |
+| `lightningd/opening_control.c` | Factory info propagation, skip funding watch, factory metadata in openchannel hook |
+| `connectd/multiplex.c` | Allow even-numbered `WIRE_FACTORY_MESSAGE` through custommsg |
+
+---
+
+Everything below this line is the standard Core Lightning documentation from upstream.
+
+---
+
 # Core Lightning (CLN): A specification compliant Lightning Network implementation in C
 
 Core Lightning (previously c-lightning) is a lightweight, highly customizable and [standard compliant][std] implementation of the Lightning Network protocol.
@@ -205,6 +289,16 @@ If you encrypt your `hsm_secret`, you will have to pass the `--encrypted-hsm` st
 ### Developers
 
 Developers wishing to contribute should start with the developer guide [here](doc/contribute-to-core-lightning/coding-style-guidelines.md).
+
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| [SuperScalar](https://github.com/8144225309/SuperScalar) | Reference implementation of the SuperScalar protocol |
+| [superscalar-cln](https://github.com/8144225309/superscalar-cln) | SuperScalar channel factory plugin for Core Lightning (bLIP-56) |
+| [superscalar-wallet](https://github.com/8144225309/superscalar-wallet) | Web-based wallet UI for SuperScalar factory management |
+| [superscalar-docs](https://github.com/8144225309/superscalar-docs) | Protocol documentation and visual guides |
+| [superscalar.win](https://superscalar.win) | SuperScalar explainer and documentation site |
 
 [blockstream-store-blog]: https://blockstream.com/2018/01/16/en-lightning-charge/
 [std]: https://github.com/lightning/bolts
