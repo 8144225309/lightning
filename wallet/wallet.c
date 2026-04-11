@@ -7182,7 +7182,11 @@ static void db_cols_account(struct db_stmt *stmt,
 		account->alt_account = NULL;
 		db_col_ignore(stmt, nonnonchannel_colname);
 		account->channel = channel_by_dbid(ld, db_col_u64(stmt, channel_colname));
-		assert(account->channel);
+		/* Factory channels may be closed/cleaned up but still have
+		 * coin movement records. Don't crash — treat as non-channel. */
+		if (!account->channel) {
+			account->alt_account = tal_strdup(account, "deleted");
+		}
 	}
 }
 
