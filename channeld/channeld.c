@@ -608,6 +608,12 @@ static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
 			take(towire_channeld_factory_message_in(NULL,
 								factory_submessage_id,
 								data)));
+
+	/* If we entered STFU for this factory message exchange (responder
+	 * side), exit STFU now. The factory protocol operates within a
+	 * single message exchange — don't stay quiescent indefinitely. */
+	if (peer->stfu_sent[LOCAL] && peer->stfu_sent[REMOTE])
+		end_stfu_mode(peer);
 }
 
 /* Send factory protocol message from lightningd to peer */
