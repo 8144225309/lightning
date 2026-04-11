@@ -361,6 +361,18 @@ static void handle_factory_change_locked(struct lightningd *ld,
 		jsonrpc_notification_end(n);
 		plugins_notify(ld->plugins, take(n));
 	}
+
+	/* Auto-continue: send factory_funding_confirmed back to channeld
+	 * so it can finalize the change. A future plugin hook can intercept
+	 * this to add validation before continuing. */
+	if (channel->owner) {
+		subd_send_msg(channel->owner,
+			      take(towire_channeld_factory_funding_confirmed(
+				      NULL, &locked_funding_txid,
+				      channel->funding.n, 0)));
+		log_info(channel->log,
+			 "Factory: auto-sent continue to channeld");
+	}
 }
 
 static void handle_splice_abort(struct lightningd *ld,
@@ -2999,3 +3011,63 @@ static const struct json_command factory_sign_commitment_command = {
 	json_factory_sign_commitment,
 };
 AUTODATA(json_command, &factory_sign_commitment_command);
+
+/* checkutxo: query whether a UTXO is still unspent.
+ * Wraps bcli's getutxout for use by plugins (e.g. breach detection). */
+struct checkutxo_info {
+	struct command *cmd;
+};
+
+static void checkutxo_cb(struct bitcoind *bitcoind,
+			  const struct bitcoin_tx_output *txout,
+			  void *arg)
+{
+	struct checkutxo_info *info = arg;
+	struct json_stream *js = json_stream_success(info->cmd);
+
+	if (txout) {
+		json_add_bool(js, "exists", true);
+		json_add_amount_sat_msat(js, "amount_msat",
+					 txout->amount);
+		json_add_hex_talarr(js, "scriptpubkey", txout->script);
+	} else {
+		json_add_bool(js, "exists", false);
+	}
+	was_pending(command_success(info->cmd, js));
+}
+
+static struct command_result *json_checkutxo(struct command *cmd,
+					     const char *buffer,
+					     const jsmntok_t *obj UNNEEDED,
+					     const jsmntok_t *params)
+{
+	struct bitcoin_txid *txid;
+	u32 *vout;
+
+	if (!param(cmd, buffer, params,
+		   p_req("txid", param_txid, &txid),
+		   p_req("vout", param_number, &vout),
+		   NULL))
+		return command_param_failed();
+
+	if (command_check_only(cmd))
+		return command_check_done(cmd);
+
+	struct bitcoin_outpoint outpoint;
+	outpoint.txid = *txid;
+	outpoint.n = *vout;
+
+	struct checkutxo_info *info = tal(cmd, struct checkutxo_info);
+	info->cmd = cmd;
+
+	bitcoind_getutxout(info, cmd->ld->topology->bitcoind,
+			   &outpoint, checkutxo_cb, info);
+
+	return command_still_pending(cmd);
+}
+
+static const struct json_command checkutxo_command = {
+	"checkutxo",
+	json_checkutxo,
+};
+AUTODATA(json_command, &checkutxo_command);
