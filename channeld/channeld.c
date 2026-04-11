@@ -725,8 +725,9 @@ static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
 	status_info("Factory continue: finalizing change (txid=%s)",
 		    fmt_bitcoin_txid(tmpctx, &funding_txid));
 
-	/* Factory change complete — allow future changes */
+	/* Factory change complete — allow future changes and exit STFU */
 	peer->factory_change_active = false;
+	end_stfu_mode(peer);
 }
 
 /* STFU callback for factory change: send factory_change_init after quiescence */
