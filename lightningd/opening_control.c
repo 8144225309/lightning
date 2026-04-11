@@ -1077,11 +1077,15 @@ static struct command_result *json_fundchannel_complete(struct command *cmd,
 	u32 *funding_txout_num = NULL;
 	struct funding_channel *fc;
 	bool *withhold;
+	struct bitcoin_txid *factory_txid;
+	u32 *factory_outnum;
 
 	if (!param_check(cmd, buffer, params,
 			 p_req("id", param_node_id, &id),
 			 p_req("psbt", param_psbt, &funding_psbt),
 			 p_opt_def("withhold", param_bool, &withhold, false),
+			 p_opt("factory_funding_txid", param_txid, &factory_txid),
+			 p_opt("factory_funding_outnum", param_number, &factory_outnum),
 			 NULL))
 		return command_param_failed();
 
@@ -1141,7 +1145,22 @@ static struct command_result *json_fundchannel_complete(struct command *cmd,
 				    fmt_amount_sat(tmpctx, fc->funding_sats));
 
 	funding_txid = tal(cmd, struct bitcoin_txid);
-	psbt_txid(NULL, funding_psbt, funding_txid, NULL);
+	if (factory_txid) {
+		/* Factory channel: use explicit funding outpoint from DW
+		 * tree leaf instead of deriving from the PSBT. */
+		*funding_txid = *factory_txid;
+		if (factory_outnum) {
+			funding_txout_num = tal(cmd, u32);
+			*funding_txout_num = *factory_outnum;
+		}
+		log_info(cmd->ld->log,
+			 "fundchannel_complete: factory funding override "
+			 "txid=%s outnum=%u",
+			 fmt_bitcoin_txid(tmpctx, funding_txid),
+			 *funding_txout_num);
+	} else {
+		psbt_txid(NULL, funding_psbt, funding_txid, NULL);
+	}
 
 	/* Fun fact: our wire protocol only allows 16 bits for outnum.
 	 * That is reflected in our encoding scheme for short_channel_id. */
