@@ -755,8 +755,6 @@ static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
 /* STFU callback for factory change: send factory_change_init after quiescence */
 static void handle_factory_stfu_success(struct peer *peer)
 {
-	struct local_anchor_info *local_anchor = NULL;
-
 	/* factory_message is not in VALID_STFU_MESSAGE, so clear the gate
 	 * before peer responds with factory_change_ack */
 	peer->stfu_wait_single_msg = false;
