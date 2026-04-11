@@ -803,11 +803,32 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 	peer->pending_factory_outpoint.n = new_funding_outnum;
 	peer->factory_change_active = true;
 
-	/* Enter STFU quiescence before sending factory_change_init */
-	peer->on_stfu_success = handle_factory_stfu_success;
-	peer->stfu_initiator = LOCAL;
-	peer->want_stfu = true;
-	maybe_send_stfu(peer);
+	/* Send factory_change_init directly (no STFU needed for
+	 * simple outpoint update — we're not re-signing commitments).
+	 * Notify master immediately to update the channel's funding. */
+	{
+		u8 *payload = tal_arr(tmpctx, u8, 0);
+		towire_bitcoin_txid(&payload, &new_funding_txid);
+		towire_u32(&payload, new_funding_outnum);
+
+		peer_write(peer->pps,
+			   take(towire_factory_message(NULL,
+						       FACTORY_SUBMSG_CHANGE_INIT,
+						       payload)));
+
+		status_info("Factory change: sent factory_change_init "
+			    "(no STFU)");
+	}
+
+	/* Immediately lock the new outpoint */
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_factory_change_locked(NULL,
+				&new_funding_txid)));
+
+	peer->factory_change_active = false;
+	status_info("Factory change: locked new outpoint %s:%u",
+		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
+		    new_funding_outnum);
 }
 
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
