@@ -55,7 +55,8 @@
 	(msg) == WIRE_SPLICE_ACK || \
 	(msg) == WIRE_TX_INIT_RBF || \
 	(msg) == WIRE_TX_ACK_RBF || \
-	(msg) == WIRE_TX_ABORT)
+	(msg) == WIRE_TX_ABORT || \
+	(msg) == WIRE_FACTORY_MESSAGE)
 
 #define SAT_MIN(a, b) (amount_sat_less((a), (b)) ? (a) : (b))
 
