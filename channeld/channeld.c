@@ -772,49 +772,19 @@ static void handle_factory_stfu_success(struct peer *peer)
 
 	status_info("Factory change: sent factory_change_init after STFU");
 
-	/* Auto-sign commitment for new outpoint. Channeld has all the
-	 * info: new outpoint from pending_factory_outpoint, same channel
-	 * amount, same remote funding pubkey. No need to wait for ack
-	 * or plugin RPC — just sign and notify master. */
-	{
-		struct inflight *inf = tal(peer->splice_state, struct inflight);
-		inf->outpoint = peer->pending_factory_outpoint;
-		inf->amnt = peer->channel->funding_sats;
-		inf->splice_amnt = 0;  /* same amount, no splice */
-		inf->remote_funding = peer->channel->funding_pubkey[REMOTE];
-		inf->psbt = create_psbt(inf, 0, 0, 0);
-		inf->i_am_initiator = true;
-		inf->force_sign_first = true;
-		inf->remote_tx_sigs = false;
-		inf->last_tx = NULL;
-		inf->locked_scid = NULL;
-		inf->i_sent_sigs = false;
-		tal_arr_expand(&peer->splice_state->inflights, inf);
+	/* Notify master to update channel funding outpoint.
+	 * Skip commitment re-signing for now — factory channels use
+	 * the DW tree for enforcement, not individual commitment TXs.
+	 * The channel's internal funding_txid is updated by master
+	 * so listpeerchannels shows the correct outpoint. */
+	wire_sync_write(MASTER_FD,
+			take(towire_channeld_factory_change_locked(NULL,
+				&peer->pending_factory_outpoint.txid)));
 
-		update_hsmd_with_splice(peer, inf, TX_INITIATOR, AMOUNT_MSAT(0));
-
-		u8 *commit_msg = send_commit_part(tmpctx, peer,
-						  &inf->outpoint,
-						  inf->amnt,
-						  NULL, false,
-						  0, 0,  /* no splice diff */
-						  peer->next_index[REMOTE] - 1,
-						  &peer->old_remote_per_commit,
-						  &local_anchor, 1,
-						  inf->remote_funding);
-
-		peer_write(peer->pps, take(commit_msg));
-		status_info("Factory change: auto-signed commitment for "
-			    "new outpoint %s:%u",
-			    fmt_bitcoin_txid(tmpctx,
-				&peer->pending_factory_outpoint.txid),
-			    peer->pending_factory_outpoint.n);
-
-		/* Notify master → updates channel funding → auto-continues */
-		wire_sync_write(MASTER_FD,
-				take(towire_channeld_factory_change_locked(NULL,
-					&peer->pending_factory_outpoint.txid)));
-	}
+	status_info("Factory change: locked new outpoint %s:%u",
+		    fmt_bitcoin_txid(tmpctx,
+			&peer->pending_factory_outpoint.txid),
+		    peer->pending_factory_outpoint.n);
 }
 
 static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
