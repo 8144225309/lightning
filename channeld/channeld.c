@@ -737,38 +737,6 @@ static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
 	end_stfu_mode(peer);
 }
 
-/* STFU callback for factory change: send factory_change_init after quiescence */
-static void handle_factory_stfu_success(struct peer *peer)
-{
-	/* factory_message is not in VALID_STFU_MESSAGE, so clear the gate
-	 * before peer responds with factory_change_ack */
-	peer->stfu_wait_single_msg = false;
-
-	u8 *payload = tal_arr(tmpctx, u8, 0);
-	towire_bitcoin_txid(&payload, &peer->pending_factory_outpoint.txid);
-	towire_u32(&payload, peer->pending_factory_outpoint.n);
-
-	peer_write(peer->pps,
-		   take(towire_factory_message(NULL,
-					       FACTORY_SUBMSG_CHANGE_INIT,
-					       payload)));
-
-	status_info("Factory change: sent factory_change_init after STFU");
-
-	/* Notify master to update channel funding outpoint.
-	 * Skip commitment re-signing for now — factory channels use
-	 * the DW tree for enforcement, not individual commitment TXs.
-	 * The channel's internal funding_txid is updated by master
-	 * so listpeerchannels shows the correct outpoint. */
-	wire_sync_write(MASTER_FD,
-			take(towire_channeld_factory_change_locked(NULL,
-				&peer->pending_factory_outpoint.txid)));
-
-	status_info("Factory change: locked new outpoint %s:%u",
-		    fmt_bitcoin_txid(tmpctx,
-			&peer->pending_factory_outpoint.txid),
-		    peer->pending_factory_outpoint.n);
-}
 
 static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 {
