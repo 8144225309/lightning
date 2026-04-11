@@ -719,16 +719,37 @@ static void handle_master_factory_sign_commitment(struct peer *peer,
 	}
 
 	/* Notify master that commitment was signed.
-	 * Master will coordinate factory_change_continue/locked
-	 * via the plugin. */
+	 * Master sends factory_change_locked notification to plugins.
+	 * The plugin can validate the new state; master then sends
+	 * channeld_factory_funding_confirmed to finalize.
+	 * For now, master auto-continues (see handle_factory_change_locked
+	 * in channel_control.c). */
 	wire_sync_write(MASTER_FD,
 			take(towire_channeld_factory_change_locked(NULL,
 				&new_funding_txid)));
 
+	status_info("Factory: commitment signed, awaiting continue "
+		    "from master before finalizing");
+}
+
+/* Factory continue: master/plugin validated the new state.
+ * Finalize the factory change and allow future changes. */
+static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
+{
+	struct bitcoin_txid funding_txid;
+	u32 funding_outnum, depth;
+
+	if (!fromwire_channeld_factory_funding_confirmed(msg,
+							  &funding_txid,
+							  &funding_outnum,
+							  &depth))
+		master_badmsg(WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED, msg);
+
+	status_info("Factory continue: finalizing change (txid=%s)",
+		    fmt_bitcoin_txid(tmpctx, &funding_txid));
+
 	/* Factory change complete — allow future changes */
 	peer->factory_change_active = false;
-
-	status_info("Factory: commitment signed, sent factory_change_locked");
 }
 
 /* STFU callback for factory change: send factory_change_init after quiescence */
@@ -6979,8 +7000,11 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
 		handle_master_factory_sign_commitment(peer, msg);
 		return;
-	/* Not yet implemented — wire reserved for future use */
+	/* Factory continue: master validated the new state, finalize change */
 	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
+		handle_master_factory_continue(peer, msg);
+		return;
+	/* Not yet implemented */
 	case WIRE_CHANNELD_FACTORY_CHANGE_ABORT:
 	/* Channeld->master only */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
