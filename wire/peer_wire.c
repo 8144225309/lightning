@@ -40,7 +40,6 @@ static bool unknown_type(enum peer_wire t)
 	case WIRE_REPLY_CHANNEL_RANGE:
 	case WIRE_GOSSIP_TIMESTAMP_FILTER:
 	case WIRE_ONION_MESSAGE:
-	case WIRE_FACTORY_MESSAGE:
 	case WIRE_TX_ADD_INPUT:
 	case WIRE_TX_REMOVE_INPUT:
 	case WIRE_TX_ADD_OUTPUT:
@@ -113,7 +112,6 @@ bool is_msg_for_gossipd(const u8 *cursor)
 	case WIRE_OPEN_CHANNEL2:
 	case WIRE_ACCEPT_CHANNEL2:
 	case WIRE_ONION_MESSAGE:
-	case WIRE_FACTORY_MESSAGE:
 	case WIRE_PEER_STORAGE:
 	case WIRE_PEER_STORAGE_RETRIEVAL:
 	case WIRE_STFU:
@@ -140,8 +138,7 @@ bool peer_wire_is_internal(enum peer_wire type)
 		return false;
 
 	/* handled by plugins */
-	if (type == WIRE_PEER_STORAGE || type == WIRE_PEER_STORAGE_RETRIEVAL
-	    || type == WIRE_FACTORY_MESSAGE)
+	if (type == WIRE_PEER_STORAGE || type == WIRE_PEER_STORAGE_RETRIEVAL)
 		return false;
 
 	return true;
@@ -171,7 +168,6 @@ bool extract_channel_id(const u8 *in_pkt, struct channel_id *channel_id)
 	case WIRE_REPLY_CHANNEL_RANGE:
 	case WIRE_GOSSIP_TIMESTAMP_FILTER:
 	case WIRE_ONION_MESSAGE:
-	case WIRE_FACTORY_MESSAGE:
 	case WIRE_PEER_STORAGE:
 	case WIRE_PEER_STORAGE_RETRIEVAL:
 	case WIRE_PROTOCOL_BATCH_ELEMENT:
