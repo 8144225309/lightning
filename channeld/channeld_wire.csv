@@ -308,15 +308,6 @@ msgtype,channeld_factory_change_init,7232
 msgdata,channeld_factory_change_init,new_funding_txid,bitcoin_txid,
 msgdata,channeld_factory_change_init,new_funding_outnum,u32,
 
-# bLIP-56: Master tells channeld to sign commitment for a new funding outpoint
-# (factory change funding has been agreed, now sign the commitment tx)
-msgtype,channeld_factory_sign_commitment,7234
-msgdata,channeld_factory_sign_commitment,new_funding_txid,bitcoin_txid,
-msgdata,channeld_factory_sign_commitment,new_funding_outnum,u32,
-msgdata,channeld_factory_sign_commitment,new_funding_amount,amount_sat,
-msgdata,channeld_factory_sign_commitment,local_funding_contribution,s64,
-msgdata,channeld_factory_sign_commitment,remote_funding_pubkey,pubkey,
-
 # bLIP-56: channeld tells master that factory state change is locked
 msgtype,channeld_factory_change_locked,7233
 msgdata,channeld_factory_change_locked,locked_funding_txid,bitcoin_txid,
