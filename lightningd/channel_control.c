@@ -1666,9 +1666,6 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_UPGRADED:
 		handle_channel_upgrade(sd->channel, msg);
 		break;
-	/* Factory messages now use ODD custommsg (plugin-to-plugin) */
-	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
-		break;
 	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
 		handle_factory_change_locked(sd->ld, sd->channel, msg);
 		break;
@@ -1701,7 +1698,6 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_STFU:
 	case WIRE_CHANNELD_DEV_QUIESCE_REPLY:
 	case WIRE_CHANNELD_ABORT:
-	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
 	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
@@ -2838,49 +2834,6 @@ static const struct json_command dev_quiesce_command = {
 	.dev_only = true,
 };
 AUTODATA(json_command, &dev_quiesce_command);
-
-/* Send a factory protocol message to a peer */
-static struct command_result *json_factory_send(struct command *cmd,
-						const char *buffer,
-						const jsmntok_t *obj UNNEEDED,
-						const jsmntok_t *params)
-{
-	struct channel_id *cid;
-	u64 *submsg_id;
-	u8 *data;
-	struct channel *channel;
-
-	if (!param(cmd, buffer, params,
-		   p_req("channel_id", param_channel_id, &cid),
-		   p_req("submessage_id", param_u64, &submsg_id),
-		   p_req("data", param_bin_from_hex, &data),
-		   NULL))
-		return command_param_failed();
-
-	channel = channel_by_cid(cmd->ld, cid);
-	if (!channel)
-		return command_fail(cmd, LIGHTNINGD, "Channel not found");
-	if (!channel->owner)
-		return command_fail(cmd, LIGHTNINGD, "Channel not active");
-
-	if (command_check_only(cmd))
-		return command_check_done(cmd);
-
-	subd_send_msg(channel->owner,
-		      take(towire_channeld_factory_message_out(NULL,
-							       (u16)*submsg_id,
-							       data)));
-
-	struct json_stream *js = json_stream_success(cmd);
-	json_add_bool(js, "sent", true);
-	return command_success(cmd, js);
-}
-
-static const struct json_command factory_send_command = {
-	"factory-send",
-	json_factory_send,
-};
-AUTODATA(json_command, &factory_send_command);
 
 /* Initiate a factory state change */
 static struct command_result *json_factory_change(struct command *cmd,

@@ -5290,7 +5290,6 @@ static void peer_in(struct peer *peer, const u8 *msg)
 
 	/* Factory protocol messages now use ODD custommsg (plugin-to-plugin).
 	 * They no longer go through channeld — connectd routes directly. */
-	case WIRE_FACTORY_MESSAGE:
 		break;
 
 	/* These are all swallowed by connectd */
@@ -6778,11 +6777,6 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_ABORT:
 		handle_abort_req(peer, msg);
 		return;
-	/* Factory message out: no longer goes through channeld.
-	 * Factory protocol uses ODD custommsg (plugin-to-plugin). */
-	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
-	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
-		break;
 	/* Factory state change from lightningd */
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 		handle_master_factory_change_init(peer, msg);
