@@ -475,7 +475,9 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	if (!has_factory)
 		channel_watch_funding(ld, channel);
 
-	if (pbase)
+	/* Skip penalty base for factory channels — factory handles
+	 * breach detection via its own DW tree mechanism */
+	if (pbase && !has_factory)
 		wallet_penalty_base_add(ld->wallet, channel->dbid, pbase);
 
 	/* This will have made us important, if we weren't before */
