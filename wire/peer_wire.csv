@@ -428,8 +428,3 @@ msgtype,onion_message,513,option_onion_messages
 msgdata,onion_message,path_key,point,
 msgdata,onion_message,len,u16,
 msgdata,onion_message,onionmsg,byte,len
-# bLIP-56: Pluggable Channel Factories
-msgtype,factory_message,32800
-msgdata,factory_message,factory_submessage_id,u16,
-msgdata,factory_message,len,u16,
-msgdata,factory_message,data,byte,len
