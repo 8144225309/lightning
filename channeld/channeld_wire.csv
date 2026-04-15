@@ -303,19 +303,7 @@ msgdata,channeld_confirmed_stfu,available_funds,amount_msat,
 # master->channeld: Please enter perform tx_abort
 msgtype,channeld_abort,7226
 
-# bLIP-56: Factory message from peer, forwarded to master
-msgtype,channeld_factory_message_in,7230
-msgdata,channeld_factory_message_in,factory_submessage_id,u16,
-msgdata,channeld_factory_message_in,len,u16,
-msgdata,channeld_factory_message_in,data,u8,len
-
-# bLIP-56: Factory message from master, send to peer
-msgtype,channeld_factory_message_out,7231
-msgdata,channeld_factory_message_out,factory_submessage_id,u16,
-msgdata,channeld_factory_message_out,len,u16,
-msgdata,channeld_factory_message_out,data,u8,len
-
-# bLIP-56: Master tells channeld to initiate a factory state change (triggers STFU + splice-like flow)
+# bLIP-56: Master tells channeld to update factory channel outpoint
 msgtype,channeld_factory_change_init,7232
 msgdata,channeld_factory_change_init,new_funding_txid,bitcoin_txid,
 msgdata,channeld_factory_change_init,new_funding_outnum,u32,
