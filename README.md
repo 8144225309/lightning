@@ -12,8 +12,9 @@ Factory protocol messages use **ODD custommsg** (type 33001) — handled entirel
 
 ### Channel Opening
 
-- **TLV 65600** (`channel_in_factory`) on `open_channel`/`accept_channel` — marks channels as factory-owned. Triggers zero-conf (`minimum_depth=0`) and skips on-chain funding watch (factory funding is virtual).
+- **`fundchannel_start` factory params** — optional `factory_protocol_id`, `factory_instance_id`, `factory_early_warning_time` RPC params (internal only, not on wire). When present, CLN enforces zero-conf (`minimum_depth=0`) and skips on-chain funding watch.
 - **`fundchannel_complete` override** — optional `factory_funding_txid` + `factory_funding_outnum` params let plugins specify the real DW tree leaf outpoint as the channel's funding source.
+- **Fundee zero-conf** — handled by the plugin's `openchannel` hook returning `mindepth=0` for known factory peers. No TLV on the wire.
 
 ### Channel State Updates
 
@@ -40,8 +41,7 @@ make -j$(nproc)
 
 | File | Changes |
 |------|---------|
-| `wire/peer_wire.csv` | TLV 65600 on open/accept_channel |
-| `openingd/openingd.c` | TLV handling, zero-conf enforcement |
+| `openingd/openingd.c` | Zero-conf enforcement for factory channels |
 | `lightningd/opening_control.c` | Factory info propagation, skip funding watch, `factory_funding_txid` override |
 | `channeld/channeld_wire.csv` | Internal wire 7232/7233/7235/7236 (factory_change_init/locked/confirmed/abort) |
 | `channeld/channeld.c` | Factory-change outpoint update + continue handler |
