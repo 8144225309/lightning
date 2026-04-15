@@ -1,44 +1,31 @@
 # Core Lightning — bLIP-56 (Pluggable Channel Factories)
 
-This is a fork of [Core Lightning](https://github.com/ElementsProject/lightning) that implements [bLIP-56](https://github.com/lightning/blips/pull/56) — a protocol extension enabling pluggable channel factories. It provides the wire-level plumbing that allows plugins like [superscalar-cln](https://github.com/8144225309/superscalar-cln) to manage factory lifecycles without requiring changes to CLN's core channel logic.
+This is a fork of [Core Lightning](https://github.com/ElementsProject/lightning) with minimal changes to support pluggable channel factories. Plugins like [superscalar-cln](https://github.com/8144225309/superscalar-cln) handle all factory logic (MuSig2, DW trees, ceremonies); this fork only provides channel-management plumbing.
 
-This fork is based on **CLN v25.12**. The bLIP-56 changes live on the [`blip-56`](https://github.com/8144225309/lightning/tree/blip-56) branch.
+Based on **CLN v25.12**. Changes on the [`blip-56`](https://github.com/8144225309/lightning/tree/blip-56) branch.
 
-## What bLIP-56 Adds
+## Design: Zero New Network Messages
 
-### New Peer Wire Message
+Factory protocol messages use **ODD custommsg** (type 33001) — handled entirely by plugins via `sendcustommsg`/`custommsg` hook. **No new peer wire types, no new feature bits.** The fork only changes how CLN manages channels internally.
 
-- **`factory_message` (type 32800)** — A single envelope message carrying a `factory_submessage_id` (u16) and variable-length `data`. All factory protocol traffic is multiplexed through submessage IDs inside this envelope, avoiding pollution of the BOLT message space.
+## What This Fork Changes
 
-### New TLV on Channel Open
+### Channel Opening
 
-- **`channel_in_factory` (TLV 65600)** on `open_channel` and `accept_channel` — Contains `factory_protocol_id` (32 bytes), `factory_instance_id` (32 bytes), and `factory_early_warning_time` (u16). When present, CLN automatically:
-  - Enforces zero-conf (`minimum_depth=0`) since factory channel funding outputs are off-chain
-  - Skips `channel_watch_funding` (no on-chain UTXO to monitor)
-  - Includes factory metadata in the `openchannel` hook for plugin approval
+- **TLV 65600** (`channel_in_factory`) on `open_channel`/`accept_channel` — marks channels as factory-owned. Triggers zero-conf (`minimum_depth=0`) and skips on-chain funding watch (factory funding is virtual).
+- **`fundchannel_complete` override** — optional `factory_funding_txid` + `factory_funding_outnum` params let plugins specify the real DW tree leaf outpoint as the channel's funding source.
 
-### New Feature Bit
+### Channel State Updates
 
-- **`OPT_PLUGGABLE_CHANNEL_FACTORIES` (bit 270/271)** — Advertised in `init` messages so peers can discover factory support.
+- **`factory-change` RPC** — updates a channel's funding outpoint after factory rotation. Internal channeld wire messages (7232/7233/7235) coordinate the update. No peer negotiation needed (simpler than splice).
 
-### New JSON-RPC Commands
+### Utilities
 
-| Command | Purpose |
-|---------|---------|
-| `factory-send` | Send a bLIP-56 `factory_message` to a peer on a given channel |
-| `factory-change` | Initiate a factory state change — triggers STFU (quiescence), then exchanges `factory_change_init`/`ack`/`funding` submessages, and re-signs commitment transactions for the new funding outpoint using splice infrastructure |
-| `factory-sign-commitment` | Sign a commitment transaction against a new factory funding outpoint |
+- **`checkutxo` RPC** — wraps bcli's `getutxout` for plugins to query whether a UTXO is still unspent (used for breach detection).
 
-### Internal Wire Messages (channeld <-> lightningd)
+### Bug Fix
 
-Seven new message types (IDs 7230–7236) for factory message forwarding, state change coordination, commitment signing, funding confirmation, and change abort.
-
-## Design Principles
-
-1. **Plugin-driven**: CLN core only provides plumbing. All factory-specific logic (tree construction, MuSig2 signing, state management) lives in plugins.
-2. **Single envelope**: One wire message type (32800) carries all factory traffic via submessage IDs.
-3. **Reuse existing infrastructure**: Factory state changes reuse the STFU + splice commitment signing path rather than introducing a parallel mechanism.
-4. **Standard submessage IDs**: Discovery (2=`supported_protocols`, 4=`piggyback`) and state changes (6=`change_init`, 8=`change_ack`, 10=`change_funding`, 12=`change_continue`, 14=`change_locked`).
+- **Wallet crash fix** — `db_cols_account` graceful fallback when coin movement records reference deleted channels.
 
 ## Building
 
@@ -49,32 +36,17 @@ cd lightning
 make -j$(nproc)
 ```
 
-Standard CLN build requirements apply. See the [upstream installation docs](https://docs.corelightning.org/docs) for platform-specific dependencies.
-
-## Running with the SuperScalar Plugin
-
-```bash
-# Build the superscalar-cln plugin (see its README for details)
-cp /path/to/superscalar-cln/superscalar.c plugins/
-make plugins/superscalar
-
-# Start lightningd with the plugin
-lightningd --network=regtest --plugin=plugins/superscalar
-```
-
 ## Files Changed vs Upstream
 
 | File | Changes |
 |------|---------|
-| `wire/peer_wire.csv` | Added `factory_message` (type 32800) |
-| `wire/peer_wire.c` | Route `WIRE_FACTORY_MESSAGE` through custommsg path |
-| `common/features.h` | Added `OPT_PLUGGABLE_CHANNEL_FACTORIES` (bit 270/271) |
-| `channeld/channeld_wire.csv` | 7 new internal wire messages (IDs 7230–7236) |
-| `channeld/channeld.c` | Factory message pass-through, STFU-gated factory_change flow, commitment signing |
-| `lightningd/channel_control.c` | `factory-send`, `factory-change`, `factory-sign-commitment` RPC handlers |
-| `openingd/openingd.c` | `channel_in_factory` TLV encoding/validation, zeroconf enforcement |
-| `lightningd/opening_control.c` | Factory info propagation, skip funding watch, factory metadata in openchannel hook |
-| `connectd/multiplex.c` | Allow even-numbered `WIRE_FACTORY_MESSAGE` through custommsg |
+| `wire/peer_wire.csv` | TLV 65600 on open/accept_channel |
+| `openingd/openingd.c` | TLV handling, zero-conf enforcement |
+| `lightningd/opening_control.c` | Factory info propagation, skip funding watch, `factory_funding_txid` override |
+| `channeld/channeld_wire.csv` | Internal wire 7232/7233/7235/7236 (factory_change_init/locked/confirmed/abort) |
+| `channeld/channeld.c` | Factory-change outpoint update + continue handler |
+| `lightningd/channel_control.c` | `factory-change`, `checkutxo` RPCs; factory_change_locked handler |
+| `wallet/wallet.c` | Crash fix for missing channels in coin movements |
 
 ---
 
