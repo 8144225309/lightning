@@ -925,9 +925,7 @@ static bool handle_custommsg(struct daemon *daemon,
 	status_peer_io(LOG_IO_IN, &peer->id, msg);
 
 	/* Even unknown messages must be explicitly allowed */
-	if (type == WIRE_FACTORY_MESSAGE) {
-		/* Handled below via custommsg forwarding. */
-	} else if (type % 2 == 0 && !find_custom_msg(daemon->custom_msgs, type)) {
+	if (type % 2 == 0 && !find_custom_msg(daemon->custom_msgs, type)) {
 		send_warning(peer, "Invalid unknown even msg %s",
 			     tal_hex(msg, msg));
 		/* We "handled" it... */
