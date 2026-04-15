@@ -55,8 +55,7 @@
 	(msg) == WIRE_SPLICE_ACK || \
 	(msg) == WIRE_TX_INIT_RBF || \
 	(msg) == WIRE_TX_ACK_RBF || \
-	(msg) == WIRE_TX_ABORT || \
-	(msg) == WIRE_FACTORY_MESSAGE)
+	(msg) == WIRE_TX_ABORT)
 
 #define SAT_MIN(a, b) (amount_sat_less((a), (b)) ? (a) : (b))
 
@@ -593,47 +592,6 @@ static void update_hsmd_with_splice(struct peer *peer,
 #define FACTORY_SUBMSG_CHANGE_LOCKED	14
 
 /* Forward factory protocol message from peer to lightningd */
-static void handle_peer_factory_message(struct peer *peer, const u8 *msg)
-{
-	u16 factory_submessage_id;
-	u8 *data;
-
-	if (!fromwire_factory_message(tmpctx, msg,
-				      &factory_submessage_id,
-				      &data))
-		peer_failed_warn(peer->pps, &peer->channel_id,
-				 "Bad factory_message %s",
-				 tal_hex(msg, msg));
-
-	wire_sync_write(MASTER_FD,
-			take(towire_channeld_factory_message_in(NULL,
-								factory_submessage_id,
-								data)));
-
-	/* If we entered STFU for this factory message exchange (responder
-	 * side), exit STFU now. The factory protocol operates within a
-	 * single message exchange — don't stay quiescent indefinitely. */
-	if (peer->stfu_sent[LOCAL] && peer->stfu_sent[REMOTE])
-		end_stfu_mode(peer);
-}
-
-/* Send factory protocol message from lightningd to peer */
-static void handle_master_factory_message_out(struct peer *peer, const u8 *msg)
-{
-	u16 factory_submessage_id;
-	u8 *data;
-
-	if (!fromwire_channeld_factory_message_out(tmpctx, msg,
-						   &factory_submessage_id,
-						   &data))
-		master_badmsg(WIRE_CHANNELD_FACTORY_MESSAGE_OUT, msg);
-
-	peer_write(peer->pps,
-		   take(towire_factory_message(NULL,
-					       factory_submessage_id,
-					       data)));
-}
-
 /* Sign commitment tx for a new factory funding outpoint.
  * Called after factory_change_funding (submsg 10) exchange.
  * Reuses splice's inflight tracking and commitment signing. */
@@ -766,23 +724,10 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
 		    new_funding_outnum);
 
-	/* Store pending factory change state */
-	peer->pending_factory_outpoint.txid = new_funding_txid;
-	peer->pending_factory_outpoint.n = new_funding_outnum;
-	peer->factory_change_active = true;
-
-	/* Send factory_change_init directly (no STFU needed for
-	 * simple outpoint update — we're not re-signing commitments).
-	 * Notify master immediately to update the channel's funding. */
+	/* Update outpoint directly — no peer message needed.
+	 * Factory protocol runs via plugin custommsg, not channeld wire.
+	 * Just notify master to update the channel's funding outpoint. */
 	{
-		u8 *payload = tal_arr(tmpctx, u8, 0);
-		towire_bitcoin_txid(&payload, &new_funding_txid);
-		towire_u32(&payload, new_funding_outnum);
-
-		peer_write(peer->pps,
-			   take(towire_factory_message(NULL,
-						       FACTORY_SUBMSG_CHANGE_INIT,
-						       payload)));
 
 		status_info("Factory change: sent factory_change_init "
 			    "(no STFU)");
@@ -5243,9 +5188,7 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		    && type != WIRE_TX_SIGNATURES
 		    /* lnd sends these early; it's harmless. */
 		    && type != WIRE_UPDATE_FEE
-		    && type != WIRE_ANNOUNCEMENT_SIGNATURES
-		    /* Factory messages may arrive before channel_ready */
-		    && type != WIRE_FACTORY_MESSAGE) {
+		    && type != WIRE_ANNOUNCEMENT_SIGNATURES) {
 			peer_failed_warn(peer->pps, &peer->channel_id,
 					 "%s (%u) before funding locked",
 					 peer_wire_name(type), type);
@@ -5345,10 +5288,10 @@ static void peer_in(struct peer *peer, const u8 *msg)
 		handle_unexpected_reestablish(peer, msg);
 		return;
 
-	/* Factory protocol messages — forward to lightningd */
+	/* Factory protocol messages now use ODD custommsg (plugin-to-plugin).
+	 * They no longer go through channeld — connectd routes directly. */
 	case WIRE_FACTORY_MESSAGE:
-		handle_peer_factory_message(peer, msg);
-		return;
+		break;
 
 	/* These are all swallowed by connectd */
 	case WIRE_PROTOCOL_BATCH_ELEMENT:
@@ -6835,10 +6778,11 @@ static void req_in(struct peer *peer, const u8 *msg)
 	case WIRE_CHANNELD_ABORT:
 		handle_abort_req(peer, msg);
 		return;
-	/* Factory message from lightningd — send to peer */
+	/* Factory message out: no longer goes through channeld.
+	 * Factory protocol uses ODD custommsg (plugin-to-plugin). */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_OUT:
-		handle_master_factory_message_out(peer, msg);
-		return;
+	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
+		break;
 	/* Factory state change from lightningd */
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 		handle_master_factory_change_init(peer, msg);
@@ -6854,7 +6798,6 @@ static void req_in(struct peer *peer, const u8 *msg)
 	/* Not yet implemented */
 	case WIRE_CHANNELD_FACTORY_CHANGE_ABORT:
 	/* Channeld->master only */
-	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
 	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
 		break;
 	case WIRE_CHANNELD_SPLICE_CONFIRMED_INIT:

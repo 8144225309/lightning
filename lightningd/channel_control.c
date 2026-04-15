@@ -1700,9 +1700,8 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 	case WIRE_CHANNELD_UPGRADED:
 		handle_channel_upgrade(sd->channel, msg);
 		break;
-	/* Factory message from peer via channeld */
+	/* Factory messages now use ODD custommsg (plugin-to-plugin) */
 	case WIRE_CHANNELD_FACTORY_MESSAGE_IN:
-		handle_factory_message_in(sd->ld, sd->channel, msg);
 		break;
 	case WIRE_CHANNELD_FACTORY_CHANGE_LOCKED:
 		handle_factory_change_locked(sd->ld, sd->channel, msg);
