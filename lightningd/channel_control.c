@@ -293,40 +293,6 @@ static void handle_splice_feerate_error(struct lightningd *ld,
 }
 
 /* Forward factory protocol message from peer to plugins */
-static void handle_factory_message_in(struct lightningd *ld,
-				      struct channel *channel,
-				      const u8 *msg)
-{
-	u16 factory_submessage_id;
-	u8 *data;
-
-	if (!fromwire_channeld_factory_message_in(tmpctx, msg,
-						  &factory_submessage_id,
-						  &data)) {
-		channel_internal_error(channel,
-				       "bad fromwire_channeld_factory_message_in %s",
-				       tal_hex(channel, msg));
-		return;
-	}
-
-	log_debug(channel->log,
-		  "Factory message from peer: submsg_id=%u len=%zu",
-		  factory_submessage_id, tal_bytelen(data));
-
-	/* Notify plugins */
-	{
-		struct jsonrpc_notification *n;
-		n = jsonrpc_notification_start(NULL, "factory_message");
-		json_add_string(n->stream, "channel_id",
-				fmt_channel_id(tmpctx, &channel->cid));
-		json_add_node_id(n->stream, "peer_id", &channel->peer->id);
-		json_add_u32(n->stream, "factory_submessage_id",
-			     factory_submessage_id);
-		json_add_hex_talarr(n->stream, "data", data);
-		jsonrpc_notification_end(n);
-		plugins_notify(ld->plugins, take(n));
-	}
-}
 
 /* Factory state change locked — update funding outpoint */
 static void handle_factory_change_locked(struct lightningd *ld,
