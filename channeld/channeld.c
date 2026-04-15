@@ -615,88 +615,6 @@ static void update_hsmd_with_splice(struct peer *peer,
 #define FACTORY_SUBMSG_CHANGE_LOCKED	14
 
 /* Forward factory protocol message from peer to lightningd */
-/* Sign commitment tx for a new factory funding outpoint.
- * Called after factory_change_funding (submsg 10) exchange.
- * Reuses splice's inflight tracking and commitment signing. */
-static void handle_master_factory_sign_commitment(struct peer *peer,
-						  const u8 *msg)
-{
-	struct bitcoin_txid new_funding_txid;
-	u32 new_funding_outnum;
-	struct amount_sat new_funding_amount;
-	s64 local_funding_contribution;
-	struct pubkey remote_funding_pubkey;
-	struct inflight *inf;
-	struct local_anchor_info *local_anchor = NULL;
-
-	if (!fromwire_channeld_factory_sign_commitment(msg,
-						       &new_funding_txid,
-						       &new_funding_outnum,
-						       &new_funding_amount,
-						       &local_funding_contribution,
-						       &remote_funding_pubkey))
-		master_badmsg(WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT, msg);
-
-	status_info("Factory sign commitment: new funding %s:%u amount=%s contrib=%"PRId64,
-		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
-		    new_funding_outnum,
-		    fmt_amount_sat(tmpctx, new_funding_amount),
-		    local_funding_contribution);
-
-	/* 1. Create inflight entry (reuses splice inflight tracking) */
-	inf = tal(peer->splice_state, struct inflight);
-	inf->outpoint.txid = new_funding_txid;
-	inf->outpoint.n = new_funding_outnum;
-	inf->amnt = new_funding_amount;
-	inf->splice_amnt = local_funding_contribution;
-	inf->remote_funding = remote_funding_pubkey;
-	inf->psbt = create_psbt(inf, 0, 0, 0);
-	inf->i_am_initiator = true;
-	inf->force_sign_first = true;
-	inf->remote_tx_sigs = false;
-	inf->last_tx = NULL;
-	inf->locked_scid = NULL;
-	inf->i_sent_sigs = false;
-	tal_arr_expand(&peer->splice_state->inflights, inf);
-
-	/* 2. Notify HSMD about new funding outpoint */
-	update_hsmd_with_splice(peer, inf, TX_INITIATOR, AMOUNT_MSAT(0));
-
-	/* 3-5. Build, sign, and send commitment_signed for new outpoint */
-	{
-		s64 funding_diff = sats_diff(inf->amnt,
-					     peer->channel->funding_sats);
-		s64 remote_splice_amnt = funding_diff - inf->splice_amnt;
-
-		u8 *commit_msg = send_commit_part(tmpctx, peer,
-						  &inf->outpoint,
-						  inf->amnt,
-						  NULL, false,
-						  inf->splice_amnt,
-						  remote_splice_amnt,
-						  peer->next_index[REMOTE] - 1,
-						  &peer->old_remote_per_commit,
-						  &local_anchor, 1,
-						  inf->remote_funding);
-
-		peer_write(peer->pps, take(commit_msg));
-		status_info("Factory: sent commitment_signed for new outpoint");
-	}
-
-	/* Notify master that commitment was signed.
-	 * Master sends factory_change_locked notification to plugins.
-	 * The plugin can validate the new state; master then sends
-	 * channeld_factory_funding_confirmed to finalize.
-	 * For now, master auto-continues (see handle_factory_change_locked
-	 * in channel_control.c). */
-	wire_sync_write(MASTER_FD,
-			take(towire_channeld_factory_change_locked(NULL,
-				&new_funding_txid)));
-
-	status_info("Factory: commitment signed, awaiting continue "
-		    "from master before finalizing");
-}
-
 /* Factory continue: master/plugin validated the new state.
  * Finalize the factory change and allow future changes. */
 static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
@@ -6944,10 +6862,6 @@ static void req_in(struct peer *peer, const u8 *msg)
 	/* Factory state change from lightningd */
 	case WIRE_CHANNELD_FACTORY_CHANGE_INIT:
 		handle_master_factory_change_init(peer, msg);
-		return;
-	/* Sign commitment for new factory funding outpoint */
-	case WIRE_CHANNELD_FACTORY_SIGN_COMMITMENT:
-		handle_master_factory_sign_commitment(peer, msg);
 		return;
 	/* Factory continue: master validated the new state, finalize change */
 	case WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED:
