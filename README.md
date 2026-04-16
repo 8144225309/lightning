@@ -44,9 +44,21 @@ Factory rotation uses the splice-equivalent flow from the [delving post](https:/
 ```bash
 git clone --branch blip-56 https://github.com/8144225309/lightning.git
 cd lightning
+
+# Enable MuSig2 module in wally's secp256k1-zkp (required for SuperScalar plugin).
+# This adds --enable-module-musig to wally's secp256k1 configure so the musig
+# headers are available at compile time.
+sed -i 's/\[--enable-module-ecdsa-s2c\]/[--enable-module-ecdsa-s2c], [--enable-module-musig]/' \
+  external/libwally-core/configure.ac
+
 ./configure
 make -j$(nproc)
 ```
+
+> **Why the `sed`?** CLN's wally bundles secp256k1-zkp but doesn't enable its MuSig2 module
+> (wally doesn't need it). The SuperScalar plugin does — it uses MuSig2 for factory tree
+> signing. Without this, the plugin can't compile against CLN's secp256k1 headers.
+> See `superscalar-cln/build-plugin.sh` for the full build explanation.
 
 ## Files Changed vs Upstream
 
