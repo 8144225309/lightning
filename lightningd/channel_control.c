@@ -316,15 +316,11 @@ static void handle_factory_change_locked(struct lightningd *ld,
 	/* Update funding outpoint */
 	channel->funding.txid = locked_funding_txid;
 
-	/* Factory channels have virtual funding that will never confirm
-	 * on-chain, so they'll never get an SCID from funding depth.
-	 * Use the local alias as the SCID for routing. */
-	if (!channel->scid && channel->alias[LOCAL]) {
-		channel_set_scid(channel, channel->alias[LOCAL]);
-		log_info(channel->log,
-			 "Factory channel: using alias %s as SCID",
-			 fmt_short_channel_id(tmpctx, *channel->scid));
-	}
+	/* Don't touch SCID — factory channels use alias SCIDs from
+	 * 0-conf, which are already registered in the channel map.
+	 * Calling channel_set_scid here would duplicate the map entry
+	 * and trigger an assertion failure. The alias SCID is sufficient
+	 * for direct-peer payment routing. */
 
 	wallet_channel_save(ld->wallet, channel);
 
