@@ -1,32 +1,43 @@
 # Core Lightning — bLIP-56 (Pluggable Channel Factories)
 
-This is a fork of [Core Lightning](https://github.com/ElementsProject/lightning) with minimal changes to support pluggable channel factories. Plugins like [superscalar-cln](https://github.com/8144225309/superscalar-cln) handle all factory logic (MuSig2, DW trees, ceremonies); this fork only provides channel-management plumbing.
+This is a fork of [Core Lightning](https://github.com/ElementsProject/lightning) implementing [bLIP-56](https://github.com/lightning/blips/pull/56) — the pluggable channel factory protocol described in the [delving bitcoin post](https://delvingbitcoin.org/t/pluggable-channel-factories/1252). Plugins like [superscalar-cln](https://github.com/8144225309/superscalar-cln) handle all factory logic (MuSig2, DW trees, ceremonies); this fork provides the channel-management plumbing that ties factory state to Lightning channel state.
 
 Based on **CLN v25.12**. Changes on the [`blip-56`](https://github.com/8144225309/lightning/tree/blip-56) branch.
 
-## Design: Zero New Network Messages
+## bLIP-56 Wire Protocol
 
-Factory protocol messages use **ODD custommsg** (type 33001) — handled entirely by plugins via `sendcustommsg`/`custommsg` hook. **No new peer wire types, no new feature bits.** The fork only changes how CLN manages channels internally.
+- **Feature bit 270/271** (`pluggable_channel_factories`) — advertised in `init` and `node_announcement` for peer discovery of factory-capable nodes.
+- **TLV 65600** (`channel_in_factory`) on `open_channel` and `accept_channel` — carries `factory_protocol_id` (32 bytes), `factory_instance_id` (32 bytes), and `factory_early_warning_time` (u16). Signals that this channel lives inside a factory.
+- **Factory plugin-to-plugin messages** use **ODD custommsg** (type 33001) — no new BOLT peer wire message types needed. Factory ceremony traffic (MuSig2 nonces, partial sigs, etc.) is entirely plugin-to-plugin.
 
 ## What This Fork Changes
 
 ### Channel Opening
 
-- **`fundchannel_start` factory params** — optional `factory_protocol_id`, `factory_instance_id`, `factory_early_warning_time` RPC params (internal only, not on wire). When present, CLN enforces zero-conf (`minimum_depth=0`) and skips on-chain funding watch.
-- **`fundchannel_complete` override** — optional `factory_funding_txid` + `factory_funding_outnum` params let plugins specify the real DW tree leaf outpoint as the channel's funding source.
-- **Fundee zero-conf** — handled by the plugin's `openchannel` hook returning `mindepth=0` for known factory peers. No TLV on the wire.
+- **TLV 65600** on `open_channel`/`accept_channel` — marks channels as factory-hosted. Triggers zero-conf (`minimum_depth=0`) and skips on-chain funding watch.
+- **`fundchannel_start` factory params** — `factory_protocol_id`, `factory_instance_id`, `factory_early_warning_time` RPC params populate TLV 65600.
+- **`fundchannel_complete` override** — `factory_funding_txid` + `factory_funding_outnum` params specify the DW tree leaf outpoint as channel funding.
+- **Fundee zero-conf** — plugin's `openchannel` hook returns `mindepth=0` for factory peers; openingd validates TLV 65600 echo.
 
-### Channel State Updates
+### Factory State Changes (Splice-Like)
 
-- **`factory-change` RPC** — updates a channel's funding outpoint after factory rotation. Internal channeld wire messages (7232/7233/7235) coordinate the update. No peer negotiation needed (simpler than splice).
+Factory rotation uses the splice-equivalent flow from the [delving post](https://delvingbitcoin.org/t/pluggable-channel-factories/1252):
+
+1. **STFU quiescence** — channeld enters `stfu` before factory-change, pausing HTLC updates
+2. **Batch `commitment_signed`** — channeld signs commitments against BOTH old and new funding outpoints simultaneously, using the `splice_info` TLV (same mechanism as splice)
+3. **Multi-outpoint validity** — both outpoints are valid until factory protocol settles
+4. **`factory_change_locked`** — plugin signals old state invalidated; channeld calls `channel_update_funding()` to finalize, exits STFU
+
+- **`factory-change` RPC** — triggers the STFU + batch commit flow. Internal channeld wires (7232/7233/7235) coordinate.
+- **`factory-forget-channel` RPC** — plugin can drop a channel without commitment broadcast (for cooperative factory close or penalty).
 
 ### Utilities
 
-- **`checkutxo` RPC** — wraps bcli's `getutxout` for plugins to query whether a UTXO is still unspent (used for breach detection).
+- **`checkutxo` RPC** — UTXO status query for breach detection.
 
 ### Bug Fix
 
-- **Wallet crash fix** — `db_cols_account` graceful fallback when coin movement records reference deleted channels.
+- **Wallet crash fix** — `db_cols_account` graceful fallback for missing channels in coin movements.
 
 ## Building
 
@@ -41,11 +52,13 @@ make -j$(nproc)
 
 | File | Changes |
 |------|---------|
-| `openingd/openingd.c` | Zero-conf enforcement for factory channels |
+| `wire/peer_wire.csv` | TLV 65600 (`channel_in_factory`) on `open_channel` and `accept_channel` |
+| `common/features.h` | Feature bit 270/271 (`pluggable_channel_factories`) |
+| `openingd/openingd.c` | TLV 65600 set/validate/echo, zero-conf enforcement |
 | `lightningd/opening_control.c` | Factory info propagation, skip funding watch, `factory_funding_txid` override |
 | `channeld/channeld_wire.csv` | Internal wire 7232/7233/7235/7236 (factory_change_init/locked/confirmed/abort) |
-| `channeld/channeld.c` | Factory-change outpoint update + continue handler |
-| `lightningd/channel_control.c` | `factory-change`, `checkutxo` RPCs; factory_change_locked handler |
+| `channeld/channeld.c` | STFU-gated factory-change, batch `commitment_signed` with factory inflight, `channel_update_funding` on lock |
+| `lightningd/channel_control.c` | `factory-change`, `factory-forget-channel`, `checkutxo` RPCs; factory_change_locked handler |
 | `wallet/wallet.c` | Crash fix for missing channels in coin movements |
 
 ---
