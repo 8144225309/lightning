@@ -614,6 +614,8 @@ static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
 }
 
 
+static void handle_factory_stfu_success(struct peer *peer);
+
 static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 {
 	struct bitcoin_txid new_funding_txid;
@@ -642,24 +644,35 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
 		    new_funding_outnum);
 
-	/* Update outpoint directly — no peer message needed.
-	 * Factory protocol runs via plugin custommsg, not channeld wire.
-	 * Just notify master to update the channel's funding outpoint. */
-	{
+	peer->pending_factory_outpoint.txid = new_funding_txid;
+	peer->pending_factory_outpoint.n = new_funding_outnum;
+	peer->factory_change_active = true;
 
-		status_info("Factory change: sent factory_change_init "
-			    "(no STFU)");
-	}
+	/* Enter STFU quiescence before factory change.
+	 * After STFU succeeds, notify master so the plugin can drive
+	 * the factory ceremony. Then master will send
+	 * WIRE_CHANNELD_FACTORY_FUNDING_CONFIRMED to exit STFU. */
+	peer->on_stfu_success = handle_factory_stfu_success;
+	peer->stfu_initiator = LOCAL;
+	peer->want_stfu = true;
+	maybe_send_stfu(peer);
+}
 
-	/* Immediately lock the new outpoint */
+static void handle_factory_stfu_success(struct peer *peer)
+{
+	peer->stfu_wait_single_msg = false;
+
+	status_info("Factory change: STFU quiescence achieved");
+
+	/* Notify master that the channel is quiesced and ready for
+	 * the factory plugin to run its ceremony. Master will
+	 * forward this to the plugin as a notification. */
 	wire_sync_write(MASTER_FD,
 			take(towire_channeld_factory_change_locked(NULL,
-				&new_funding_txid)));
+				&peer->pending_factory_outpoint.txid)));
 
-	peer->factory_change_active = false;
-	status_info("Factory change: locked new outpoint %s:%u",
-		    fmt_bitcoin_txid(tmpctx, &new_funding_txid),
-		    new_funding_outnum);
+	status_info("Factory change: notified master, waiting for "
+		    "factory_funding_confirmed to exit STFU");
 }
 
 static void handle_peer_channel_ready(struct peer *peer, const u8 *msg)
