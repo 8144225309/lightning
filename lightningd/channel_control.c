@@ -2997,3 +2997,51 @@ static const struct json_command checkutxo_command = {
 	json_checkutxo,
 };
 AUTODATA(json_command, &checkutxo_command);
+
+/* factory-forget-channel: drop a factory channel from state without
+ * broadcasting a commitment transaction. Used when the factory
+ * protocol has resolved the channel (cooperative close, penalty,
+ * or timeout) and the base node no longer needs to track it. */
+static struct command_result *json_factory_forget_channel(struct command *cmd,
+							   const char *buffer,
+							   const jsmntok_t *obj UNNEEDED,
+							   const jsmntok_t *params)
+{
+	struct peer *peer;
+	struct channel_id *cid;
+	struct channel *channel;
+
+	if (!param(cmd, buffer, params,
+		   p_req("id", param_peer, &peer),
+		   p_req("channel_id", param_channel_id, &cid),
+		   NULL))
+		return command_param_failed();
+
+	channel = NULL;
+	list_for_each(&peer->channels, channel, list) {
+		if (channel_id_eq(cid, &channel->cid))
+			break;
+		channel = NULL;
+	}
+
+	if (!channel)
+		return command_fail(cmd, LIGHTNINGD,
+				    "No channel %s with peer",
+				    fmt_channel_id(tmpctx, cid));
+
+	struct json_stream *response = json_stream_success(cmd);
+	json_add_txid(response, "funding_txid",
+		      &channel->funding.txid);
+
+	channel->error = towire_errorfmt(channel, &channel->cid,
+					 "factory-forget-channel");
+	delete_channel(channel, false);
+
+	return command_success(cmd, response);
+}
+
+static const struct json_command factory_forget_channel_command = {
+	"factory-forget-channel",
+	json_factory_forget_channel,
+};
+AUTODATA(json_command, &factory_forget_channel_command);
