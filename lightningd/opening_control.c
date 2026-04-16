@@ -474,6 +474,12 @@ static void opening_funder_finished(struct subd *openingd, const u8 *resp,
 	 * the funding tx is a factory leaf, not broadcast on chain) */
 	if (!has_factory)
 		channel_watch_funding(ld, channel);
+	else if (!channel->scid && channel->alias[LOCAL]) {
+		/* Factory channels have virtual funding that never confirms.
+		 * Set the SCID to the local alias immediately so the channel
+		 * is routable for payments. */
+		channel_set_scid(channel, channel->alias[LOCAL]);
+	}
 
 	/* Skip penalty base for factory channels — factory handles
 	 * breach detection via its own DW tree mechanism */
@@ -601,6 +607,8 @@ static void opening_fundee_finished(struct subd *openingd,
 	 * a factory leaf, not broadcast on chain. */
 	if (!has_factory)
 		channel_watch_funding(ld, channel);
+	else if (!channel->scid && channel->alias[LOCAL])
+		channel_set_scid(channel, channel->alias[LOCAL]);
 
 	/* Tell plugins about the success */
 	notify_channel_opened(ld, &channel->peer->id, &channel->funding_sats,
