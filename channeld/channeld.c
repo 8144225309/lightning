@@ -631,6 +631,23 @@ static void handle_master_factory_continue(struct peer *peer, const u8 *msg)
 	status_info("Factory continue: finalizing change (txid=%s)",
 		    fmt_bitcoin_txid(tmpctx, &funding_txid));
 
+	/* Update channel funding to the new factory outpoint.
+	 * channel_update_funding adjusts balances by
+	 * pending_factory_contribution (0 for rotation). */
+	const char *error = channel_update_funding(
+		peer->channel,
+		&peer->pending_factory_outpoint,
+		peer->pending_factory_amount,
+		peer->pending_factory_contribution);
+	if (error)
+		status_failed(STATUS_FAIL_INTERNAL_ERROR,
+			      "Factory change update_funding: %s", error);
+
+	status_info("Factory change: channel funding updated to %s:%u",
+		    fmt_bitcoin_txid(tmpctx,
+			&peer->pending_factory_outpoint.txid),
+		    peer->pending_factory_outpoint.n);
+
 	/* Factory change complete — allow future changes and exit STFU */
 	peer->factory_change_active = false;
 	end_stfu_mode(peer);
@@ -669,6 +686,10 @@ static void handle_master_factory_change_init(struct peer *peer, const u8 *msg)
 
 	peer->pending_factory_outpoint.txid = new_funding_txid;
 	peer->pending_factory_outpoint.n = new_funding_outnum;
+	peer->pending_factory_amount = peer->channel->funding_sats;
+	peer->pending_factory_remote_funding =
+		peer->channel->funding_pubkey[REMOTE];
+	peer->pending_factory_contribution = 0;
 	peer->factory_change_active = true;
 
 	/* Enter STFU quiescence before factory change.
@@ -1499,7 +1520,8 @@ static void send_commit(struct peer *peer)
 	u32 feerate_target;
 	u8 **msgs = tal_arr(tmpctx, u8*, 1);
 	u8 *msg;
-	u16 batch_size = tal_count(peer->splice_state->inflights) + 1;
+	u16 batch_size = tal_count(peer->splice_state->inflights) + 1
+			+ (peer->factory_change_active ? 1 : 0);
 	struct local_anchor_info *local_anchor, *anchors_info;
 
 	if (peer->dev_disable_commit && !*peer->dev_disable_commit) {
@@ -1594,7 +1616,8 @@ static void send_commit(struct peer *peer)
 	 */
 	changed_htlcs = tal_arr(tmpctx, const struct htlc *, 0);
 
-	if (!channel_sending_commit(peer->channel, &changed_htlcs)) {
+	if (!channel_sending_commit(peer->channel, &changed_htlcs)
+	    && !peer->factory_change_active) {
 		status_debug("Can't send commit: nothing to send,"
 			     " feechange %s (%s)"
 			     " blockheight %s (%s)",
@@ -1647,6 +1670,24 @@ static void send_commit(struct peer *peer)
 						&local_anchor,
 						batch_size,
 						peer->splice_state->inflights[i]->remote_funding));
+		if (local_anchor)
+			tal_arr_expand(&anchors_info, *local_anchor);
+	}
+
+	/* Factory-change inflight: sign commitment against new outpoint */
+	if (peer->factory_change_active) {
+		tal_arr_expand(&msgs,
+			send_commit_part(msgs, peer,
+				&peer->pending_factory_outpoint,
+				peer->pending_factory_amount,
+				changed_htlcs, false,
+				peer->pending_factory_contribution,
+				0 - peer->pending_factory_contribution,
+				peer->next_index[REMOTE],
+				&peer->remote_per_commit,
+				&local_anchor,
+				batch_size,
+				peer->pending_factory_remote_funding));
 		if (local_anchor)
 			tal_arr_expand(&anchors_info, *local_anchor);
 	}
@@ -2244,11 +2285,12 @@ static struct commitsig_info *handle_peer_commit_sig(struct peer *peer,
 	htlc_sigs = unraw_sigs(tmpctx, raw_sigs,
 			       channel_has_anchors(peer->channel));
 
-	if (commit_index) {
+	if (commit_index
+	    && commit_index <= (int)tal_count(peer->splice_state->inflights)) {
 		outpoint = peer->splice_state->inflights[commit_index - 1]->outpoint;
 		funding_sats = peer->splice_state->inflights[commit_index - 1]->amnt;
 
-		status_debug("handle_peer_commit_sig for inflight outpoint %s",
+		status_debug("handle_peer_commit_sig for splice inflight %s",
 			     fmt_bitcoin_txid(tmpctx, &outpoint.txid));
 
 		if (cs_tlv->splice_info
@@ -2256,6 +2298,22 @@ static struct commitsig_info *handle_peer_commit_sig(struct peer *peer,
 					cs_tlv->splice_info))
 			peer_failed_err(peer->pps, &peer->channel_id,
 					"Expected commit sig message for %s but"
+					" got %s",
+					fmt_bitcoin_txid(tmpctx, &outpoint.txid),
+					fmt_bitcoin_txid(tmpctx, cs_tlv->splice_info));
+	}
+	else if (commit_index && peer->factory_change_active) {
+		outpoint = peer->pending_factory_outpoint;
+		funding_sats = peer->pending_factory_amount;
+
+		status_debug("handle_peer_commit_sig for factory inflight %s",
+			     fmt_bitcoin_txid(tmpctx, &outpoint.txid));
+
+		if (cs_tlv->splice_info
+		    && !bitcoin_txid_eq(&outpoint.txid,
+					cs_tlv->splice_info))
+			peer_failed_err(peer->pps, &peer->channel_id,
+					"Expected factory commit sig for %s but"
 					" got %s",
 					fmt_bitcoin_txid(tmpctx, &outpoint.txid),
 					fmt_bitcoin_txid(tmpctx, cs_tlv->splice_info));
@@ -2490,6 +2548,12 @@ static int commit_index_from_msg(const u8 *msg, struct peer *peer)
 		if (bitcoin_txid_eq(&funding_txid,
 				    &peer->splice_state->inflights[i]->outpoint.txid))
 			return i + 1;
+
+	/* Factory-change inflight: index after all splice inflights */
+	if (peer->factory_change_active
+	    && bitcoin_txid_eq(&funding_txid,
+			       &peer->pending_factory_outpoint.txid))
+		return tal_count(peer->splice_state->inflights) + 1;
 
 	return -1;
 }
@@ -5438,7 +5502,8 @@ static void resend_commitment(struct peer *peer, struct changed_htlc *last)
 	u8 *msg;
 	u8 **msgs = tal_arr(tmpctx, u8*, 1);
 	struct local_anchor_info *local_anchor;
-	u16 batch_size = tal_count(peer->splice_state->inflights) + 1;
+	u16 batch_size = tal_count(peer->splice_state->inflights) + 1
+			+ (peer->factory_change_active ? 1 : 0);
 
 	status_debug("Retransmitting commitment, feerate LOCAL=%u REMOTE=%u,"
 		     " blockheight LOCAL=%u REMOTE=%u",
@@ -5573,6 +5638,21 @@ static void resend_commitment(struct peer *peer, struct changed_htlc *last)
 						&peer->remote_per_commit,
 						&local_anchor, batch_size,
 						peer->splice_state->inflights[i]->remote_funding));
+	}
+
+	/* Factory-change inflight resend */
+	if (peer->factory_change_active) {
+		tal_arr_expand(&msgs,
+			send_commit_part(msgs, peer,
+				&peer->pending_factory_outpoint,
+				peer->pending_factory_amount,
+				NULL, false,
+				peer->pending_factory_contribution,
+				0 - peer->pending_factory_contribution,
+				peer->next_index[REMOTE] - 1,
+				&peer->remote_per_commit,
+				&local_anchor, batch_size,
+				peer->pending_factory_remote_funding));
 	}
 
 	send_message_batch(peer, msgs);
