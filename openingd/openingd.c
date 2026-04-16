@@ -351,6 +351,17 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 	 */
 	open_tlvs->channel_type = state->channel_type->features;
 
+	/* Include factory TLV if this is a factory channel */
+	if (state->has_factory) {
+		open_tlvs->channel_in_factory = tal(open_tlvs,
+			struct tlv_open_channel_tlvs_channel_in_factory);
+		memcpy(open_tlvs->channel_in_factory->factory_protocol_id,
+		       state->factory_protocol_id, 32);
+		memcpy(open_tlvs->channel_in_factory->factory_instance_id,
+		       state->factory_instance_id, 32);
+		open_tlvs->channel_in_factory->factory_early_warning_time =
+			state->factory_early_warning_time;
+	}
 
 	msg = towire_open_channel(NULL,
 				  &chainparams->genesis_blockhash,
@@ -433,6 +444,18 @@ static u8 *funder_channel_start(struct state *state, u8 channel_flags,
 	 * - if `channel_type` does not match the `channel_type` from `open_channel`:
 	 *    - MUST fail the channel.
 	 */
+
+	/* Validate channel_in_factory TLV echo */
+	if (state->has_factory && !accept_tlvs->channel_in_factory) {
+		negotiation_failed(state,
+				   "Peer did not include channel_in_factory in accept_channel");
+		return NULL;
+	}
+	if (!state->has_factory && accept_tlvs->channel_in_factory) {
+		negotiation_failed(state,
+				   "Peer included unexpected channel_in_factory in accept_channel");
+		return NULL;
+	}
 
 	/* Simple case: caller specified, don't allow any variants */
 	if (!featurebits_eq(accept_tlvs->channel_type, state->channel_type->features)) {
@@ -927,7 +950,12 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	}
 
 	/* Factory channel requires option_zeroconf */
-	/* TLV 65600 removed */
+	if (open_tlvs->channel_in_factory
+	    && !channel_type_has(state->channel_type, OPT_ZEROCONF)) {
+		negotiation_failed(state,
+				   "Factory channel must use option_zeroconf");
+		return NULL;
+	}
 
 	/* BOLT #2:
 	 *
@@ -1035,7 +1063,7 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	/* Check with lightningd that we can accept this?  In particular,
 	 * if we have an existing channel, we don't support it. */
 	{
-		bool has_factory = false; /* TLV removed: fundee detects via openchannel hook */
+		bool has_factory = (open_tlvs->channel_in_factory != NULL);
 		u8 empty_id[32] = {0};
 		msg = towire_openingd_got_offer(NULL,
 					       state->funding_sats,
@@ -1051,9 +1079,9 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 					       state->upfront_shutdown_script[REMOTE],
 					       state->channel_type,
 					       has_factory,
-					       has_factory ? (u8[32]){0} : empty_id,
-					       has_factory ? (u8[32]){0} : empty_id,
-					       has_factory ? 0 : 0);
+					       has_factory ? open_tlvs->channel_in_factory->factory_protocol_id : empty_id,
+					       has_factory ? open_tlvs->channel_in_factory->factory_instance_id : empty_id,
+					       has_factory ? open_tlvs->channel_in_factory->factory_early_warning_time : 0);
 	}
 	wire_sync_write(REQ_FD, take(msg));
 	msg = wire_sync_read(tmpctx, REQ_FD);
@@ -1078,7 +1106,10 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	 * protocol itself provides the trust relationship.
 	 * Must override minimum_depth here because the hook reply
 	 * may have reset it to the node's default. */
-	/* TLV 65600 removed */
+	if (open_tlvs->channel_in_factory) {
+		state->minimum_depth = 0;
+		status_info("Factory channel (fundee): minimum_depth forced to 0");
+	}
 
 	/* BOLT #2:
 	 * The receiving node MUST fail the channel if:
@@ -1114,7 +1145,17 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 	 */
 	accept_tlvs->channel_type = state->channel_type->features;
 
-	/* TLV 65600 removed */
+	/* Echo back channel_in_factory TLV if present in open_channel */
+	if (open_tlvs->channel_in_factory) {
+		accept_tlvs->channel_in_factory = tal(accept_tlvs,
+			struct tlv_accept_channel_tlvs_channel_in_factory);
+		memcpy(accept_tlvs->channel_in_factory->factory_protocol_id,
+		       open_tlvs->channel_in_factory->factory_protocol_id, 32);
+		memcpy(accept_tlvs->channel_in_factory->factory_instance_id,
+		       open_tlvs->channel_in_factory->factory_instance_id, 32);
+		accept_tlvs->channel_in_factory->factory_early_warning_time =
+			open_tlvs->channel_in_factory->factory_early_warning_time;
+	}
 
 	msg = towire_accept_channel(NULL, &state->channel_id,
 				    state->localconf.dust_limit,
@@ -1338,10 +1379,10 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 				     state->upfront_shutdown_script[LOCAL],
 				     state->upfront_shutdown_script[REMOTE],
 				     state->channel_type,
-				     false,
-				     (u8[32]){0},
-				     (u8[32]){0},
-				     0);
+				     open_tlvs->channel_in_factory != NULL,
+				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_protocol_id : (u8[32]){0},
+				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_instance_id : (u8[32]){0},
+				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_early_warning_time : 0);
 }
 
 /*~ Standard "peer sent a message, handle it" demuxer.  Though it really only
