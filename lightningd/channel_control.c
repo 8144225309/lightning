@@ -3007,15 +3007,22 @@ static struct command_result *json_factory_forget_channel(struct command *cmd,
 							   const jsmntok_t *obj UNNEEDED,
 							   const jsmntok_t *params)
 {
-	struct peer *peer;
+	struct node_id *id;
 	struct channel_id *cid;
+	struct peer *peer;
 	struct channel *channel;
 
 	if (!param(cmd, buffer, params,
-		   p_req("id", param_peer, &peer),
+		   p_req("id", param_node_id, &id),
 		   p_req("channel_id", param_channel_id, &cid),
 		   NULL))
 		return command_param_failed();
+
+	peer = peer_by_id(cmd->ld, id);
+	if (!peer)
+		return command_fail(cmd, LIGHTNINGD,
+				    "Unknown peer %s",
+				    fmt_node_id(tmpctx, id));
 
 	channel = NULL;
 	list_for_each(&peer->channels, channel, list) {
