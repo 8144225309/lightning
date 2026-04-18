@@ -748,6 +748,15 @@ static char *opt_ignore(void *unused)
 	return NULL;
 }
 
+/* Compat shim for upstream CLI options the bLIP-56 fork does not support.
+ * pyln-testing unconditionally passes --grpc-port (targeting upstream
+ * cln-grpc, which this fork does not ship). Silently accept the flag so
+ * the test harness can start lightningd without pulling in the plugin. */
+static char *opt_ignore_arg(const char *arg, void *unused)
+{
+	return NULL;
+}
+
 static void handle_alarm(int sig)
 {
 	abort();
@@ -1593,6 +1602,12 @@ static void register_opts(struct lightningd *ld)
 			 "Set the file mode (permissions) for the "
 			 "JSON-RPC socket");
 
+	/* Upstream-compat noops — accepted and ignored. See opt_ignore_arg. */
+	opt_register_arg("--grpc-port", opt_ignore_arg, NULL, NULL,
+			 "IGNORED: upstream cln-grpc option, retained for pyln-testing compat");
+	opt_register_arg("--grpc-host", opt_ignore_arg, NULL, NULL,
+			 "IGNORED: upstream cln-grpc option, retained for pyln-testing compat");
+
 	opt_register_arg("--force-feerates",
 			 opt_force_feerates, NULL, ld,
 			 "Set testnet/regtest feerates in sats perkw, opening/mutual_close/unlateral_close/delayed_to_us/htlc_resolution/penalty: if fewer specified, last number applies to remainder");
@@ -1880,7 +1895,8 @@ bool opt_canon_bool(const char *val)
 
 bool is_known_opt_cb_arg(char *(*cb_arg)(const char *, void *))
 {
-	return cb_arg == (void *)opt_set_talstr
+	return cb_arg == (void *)opt_ignore_arg
+		|| cb_arg == (void *)opt_set_talstr
 		|| cb_arg == (void *)opt_add_proxy_addr
 		|| cb_arg == (void *)opt_force_feerates
 		|| cb_arg == (void *)opt_add_plugin
