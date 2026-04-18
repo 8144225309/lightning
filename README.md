@@ -58,7 +58,16 @@ make -j$(nproc)
 > **Why the `sed`?** CLN's wally bundles secp256k1-zkp but doesn't enable its MuSig2 module
 > (wally doesn't need it). The SuperScalar plugin does — it uses MuSig2 for factory tree
 > signing. Without this, the plugin can't compile against CLN's secp256k1 headers.
-> See `superscalar-cln/build-plugin.sh` for the full build explanation.
+
+### Plugin Build
+
+After building CLN, build the SuperScalar plugin using the script in [superscalar-cln](https://github.com/8144225309/superscalar-cln):
+
+```bash
+CLN_DIR=/path/to/cln-blip56 SS_DIR=/path/to/SuperScalar /path/to/superscalar-cln/build-plugin.sh
+```
+
+See [`superscalar-cln/build-plugin.sh`](https://github.com/8144225309/superscalar-cln/blob/main/build-plugin.sh) for full details.
 
 ## Files Changed vs Upstream
 
