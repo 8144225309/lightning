@@ -7,8 +7,19 @@ Based on **CLN v25.12**. Changes on the [`blip-56`](https://github.com/814422530
 ## bLIP-56 Wire Protocol
 
 - **Feature bit 270/271** (`pluggable_channel_factories`) — advertised in `init` and `node_announcement` for peer discovery of factory-capable nodes.
-- **TLV 65600** (`channel_in_factory`) on `open_channel` and `accept_channel` — carries `factory_protocol_id` (32 bytes), `factory_instance_id` (32 bytes), and `factory_early_warning_time` (u16). Signals that this channel lives inside a factory.
-- **Factory plugin-to-plugin messages** use **ODD custommsg** (type 33001) — no new BOLT peer wire message types needed. Factory ceremony traffic (MuSig2 nonces, partial sigs, etc.) is entirely plugin-to-plugin.
+- **TLV 65600** (`channel_in_factory`) on `open_channel` and `accept_channel` — carries `factory_protocol_id` (32 bytes), `factory_instance_id` (32 bytes), and `factory_early_warning_time` (u16). Signals that this channel lives inside a factory. Only sent when feature bit 270/271 is mutually negotiated, so non-factory peers never see it.
+- **All factory peer-to-peer traffic** uses **ODD custommsg type 33001** — one wire type for discovery, ceremony, and rotation. Carries the bLIP-56 `factory_piggyback` envelope (outer `factory_submessage_id` + TLV 0 `factory_protocol_id` + TLV 1024 payload with inner `app_submsg_id`). No new BOLT peer wire message types needed.
+
+### Why ODD 33001 (not the draft's EVEN 32800)
+
+The bLIP-56 draft currently specifies `factory_message_id = 32800` (EVEN). This fork uses ODD 33001. Reasoning:
+
+1. **CLN plugin API constraint.** CLN dispatches only ODD custom message types to plugins via the `custommsg` hook. EVEN types are held by core because unknown EVEN triggers a BOLT 1 disconnect, which the framework can't evaluate until the plugin has replied. Any plugin-implemented bLIP-56 node (CLN, LDK, any plugin-architecture implementation) hits the same constraint.
+2. **bLIP-17 precedent.** Hosted Channels (bLIP-17) uses only ODD custom types (63497–65535) for its entire state-machine protocol, including consensus-critical messages. That precedent is directly applicable: feature-bit-gated plugin protocols don't need EVEN's must-understand semantics because feature-bit negotiation already establishes mutual support upstream.
+3. **Feature bit 270/271 does the must-understand work.** A peer that hasn't advertised factory support never receives factory messages; a peer that has is contractually committed to handling them. EVEN's disconnect-on-unknown rule adds nothing over feature-bit gating for a protocol scoped to advertised participants.
+4. **No interop value lost.** Factory-ness is invisible to non-factory peers — sub-channels use alias scids (private channel mechanism), routing is standard BOLT 2, force-close is participant-local. Non-factory nodes never need to verify factory-specific messages.
+
+This choice will be proposed as spec feedback on [bLIP-56 PR #56](https://github.com/lightning/blips/pull/56); if the spec lands on a different ODD value, the fork will realign (one constant change). An EVEN wire-message addition can be layered in later if the spec ever requires cross-implementation base-layer signaling that must reach non-plugin nodes — but no such need has been identified.
 
 ## What This Fork Changes
 
