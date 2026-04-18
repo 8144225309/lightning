@@ -557,10 +557,17 @@ static void handle_peer_splice_locked(struct peer *peer, const u8 *msg)
 	implied_peer_splice_locked(peer, splice_txid);
 }
 
-/* bLIP-56: Factory submessage IDs per spec.
- * All carried inside factory_message (32800) with factory_submessage_id field.
+/* bLIP-56: Factory submessage IDs.
  *
- * Factory change flow:
+ * This fork implements all peer-to-peer factory traffic via ODD custommsg
+ * 33001 (plugin-dispatched), not the draft spec's EVEN type 32800. Rationale:
+ * ODD is the only custom message type CLN's plugin API dispatches to plugins,
+ * and feature-bit 270/271 negotiation already provides the must-understand
+ * guarantee EVEN was intended to supply (see bLIP-17 Hosted Channels for the
+ * same design decision). factory_submessage_id is carried in the TLV payload
+ * inside the envelope.
+ *
+ * Factory change flow (submessage IDs 6/8/10/12, carried in custommsg 33001):
  *   1. Enter STFU (quiescence)
  *   2. factory_change_init (6) — initiator proposes change
  *   3. factory_change_ack (8) — responder acknowledges

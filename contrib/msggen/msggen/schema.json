@@ -12390,7 +12390,7 @@
       "rpc": "factory-send",
       "title": "Send a factory protocol message to a peer",
       "description": [
-        "`factory-send` sends a bLIP-56 factory protocol message to the peer on the given channel. The message is delivered as a `factory_message` (type 32800) with the specified `submessage_id` and `data`."
+        "`factory-send` sends a bLIP-56 factory protocol message to the peer on the given channel. The message is delivered via ODD custommsg (type 33001) through the plugin custommsg hook, wrapped in the bLIP-56 factory_piggyback envelope, with the specified `submessage_id` and `data` carried in the TLV payload. This fork uses ODD type 33001 rather than the bLIP-56 draft's EVEN 32800; see the fork README for rationale (CLN plugin API constraint + bLIP-17 precedent)."
       ],
       "request": {
         "required": [
