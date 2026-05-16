@@ -929,6 +929,9 @@ static struct feature_set *default_features(const tal_t *ctx)
 		/* Removed later for elements */
 		OPTIONAL_FEATURE(OPT_ANCHORS_ZERO_FEE_HTLC_TX),
 		OPTIONAL_FEATURE(OPT_SPLICE),
+		/* bLIP-56: signal we support pluggable channel factories so
+		 * other factory-aware nodes can discover us. */
+		OPTIONAL_FEATURE(OPT_PLUGGABLE_CHANNEL_FACTORIES),
 	};
 
 	for (size_t i = 0; i < ARRAY_SIZE(features); i++) {
