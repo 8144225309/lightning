@@ -7,29 +7,43 @@
     "`factory-send` sends a bLIP-56 factory protocol message to the peer on the given channel. The message is delivered via ODD custommsg (type 33001) through the plugin custommsg hook, wrapped in the bLIP-56 factory_piggyback envelope, with the specified `submessage_id` and `data` carried in the TLV payload. This fork uses ODD type 33001 rather than the bLIP-56 draft's EVEN 32800; see the fork README for rationale (CLN plugin API constraint + bLIP-17 precedent)."
   ],
   "request": {
-    "required": ["channel_id", "submessage_id", "data"],
+    "required": [
+      "channel_id",
+      "submessage_id",
+      "data"
+    ],
     "additionalProperties": false,
     "properties": {
       "channel_id": {
         "type": "hash",
-        "description": ["The channel to send the factory message on."]
+        "description": [
+          "The channel to send the factory message on."
+        ]
       },
       "submessage_id": {
         "type": "u64",
-        "description": ["The factory submessage identifier."]
+        "description": [
+          "The factory submessage identifier."
+        ]
       },
       "data": {
         "type": "hex",
-        "description": ["The factory message payload."]
+        "description": [
+          "The factory message payload."
+        ]
       }
     }
   },
   "response": {
-    "required": ["sent"],
+    "required": [
+      "sent"
+    ],
     "properties": {
       "sent": {
         "type": "boolean",
-        "description": ["Whether the message was sent."]
+        "description": [
+          "Whether the message was sent."
+        ]
       }
     }
   },
