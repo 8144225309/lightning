@@ -957,6 +957,24 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 		return NULL;
 	}
 
+	/* bLIP-56: copy factory TLV fields out of tmpctx-allocated open_tlvs
+	 * into the persistent `state` struct. open_tlvs is freed by
+	 * clean_tmpctx() inside opening_negotiate_msg() further down; any read
+	 * after that point is a use-after-free (caught by valgrind). */
+	state->has_factory = (open_tlvs->channel_in_factory != NULL);
+	if (state->has_factory) {
+		memcpy(state->factory_protocol_id,
+		       open_tlvs->channel_in_factory->factory_protocol_id, 32);
+		memcpy(state->factory_instance_id,
+		       open_tlvs->channel_in_factory->factory_instance_id, 32);
+		state->factory_early_warning_time =
+			open_tlvs->channel_in_factory->factory_early_warning_time;
+	} else {
+		memset(state->factory_protocol_id, 0, 32);
+		memset(state->factory_instance_id, 0, 32);
+		state->factory_early_warning_time = 0;
+	}
+
 	/* BOLT #2:
 	 *
 	 * The receiving node MUST fail the channel if:
@@ -1379,10 +1397,13 @@ static u8 *fundee_channel(struct state *state, const u8 *open_channel_msg)
 				     state->upfront_shutdown_script[LOCAL],
 				     state->upfront_shutdown_script[REMOTE],
 				     state->channel_type,
-				     open_tlvs->channel_in_factory != NULL,
-				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_protocol_id : (u8[32]){0},
-				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_instance_id : (u8[32]){0},
-				     open_tlvs->channel_in_factory ? open_tlvs->channel_in_factory->factory_early_warning_time : 0);
+				     /* bLIP-56: read from state, not open_tlvs.
+				      * open_tlvs was freed by clean_tmpctx() in
+				      * the opening_negotiate_msg() loop above. */
+				     state->has_factory,
+				     state->factory_protocol_id,
+				     state->factory_instance_id,
+				     state->factory_early_warning_time);
 }
 
 /*~ Standard "peer sent a message, handle it" demuxer.  Though it really only
