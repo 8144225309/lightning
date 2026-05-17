@@ -109,6 +109,11 @@ static bool test_sync_write(int fd, const void *msg TAKES)
 			u8 channel_flags;
 			u8 *shutdown_scriptpubkey;
 			struct channel_type *ctype;
+			/* bLIP-56 factory fields (added to wire signature) */
+			bool has_factory;
+			u8 factory_protocol_id[32];
+			u8 factory_instance_id[32];
+			u16 factory_early_warning_time;
 
 			assert(fromwire_openingd_got_offer(tmpctx, msg,
 						&funding_satoshis,
@@ -122,7 +127,11 @@ static bool test_sync_write(int fd, const void *msg TAKES)
 						&max_accepted_htlcs,
 						&channel_flags,
 						&shutdown_scriptpubkey,
-						&ctype));
+						&ctype,
+						&has_factory,
+						factory_protocol_id,
+						factory_instance_id,
+						&factory_early_warning_time));
 		}
 	}
 	else if (fd == HSM_FD) /* HSMD message */
