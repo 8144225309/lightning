@@ -2,7 +2,7 @@
 
 This is a fork of [Core Lightning](https://github.com/ElementsProject/lightning) implementing [bLIP-56](https://github.com/lightning/blips/pull/56) — the pluggable channel factory protocol described in the [delving bitcoin post](https://delvingbitcoin.org/t/pluggable-channel-factories/1252). Plugins like [superscalar-cln](https://github.com/8144225309/superscalar-cln) handle all factory logic (MuSig2, DW trees, ceremonies); this fork provides the channel-management plumbing that ties factory state to Lightning channel state.
 
-Based on **CLN v25.12**. Changes on the [`blip-56`](https://github.com/8144225309/lightning/tree/blip-56) branch.
+Based on **CLN v26.06rc1**. Changes on the [`blip-56`](https://github.com/8144225309/lightning/tree/blip-56) branch. (Originally branched off v25.12; rebased onto v26.06rc1 in May 2026.)
 
 ## bLIP-56 Wire Protocol
 
