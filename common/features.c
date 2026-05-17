@@ -144,6 +144,11 @@ static const struct feature_style feature_styles[] = {
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
 			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
 			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT} },
+	/* bLIP-56 #9: 270/271 pluggable_channel_factories — advertised in
+	 * init + node_announcement so factory-aware peers discover each other. */
+	{ OPT_PLUGGABLE_CHANNEL_FACTORIES,
+	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT } },
 };
 
 struct dependency {
