@@ -12,8 +12,6 @@
 #include <errno.h>
 #include <hsmd/permissions.h>
 #include <lightningd/channel.h>
-#include <lightningd/jsonrpc.h>
-#include <lightningd/plugin.h>
 #include <lightningd/channel_control.h>
 #include <lightningd/channel_gossip.h>
 #include <lightningd/closing_control.h>
@@ -21,9 +19,11 @@
 #include <lightningd/dual_open_control.h>
 #include <lightningd/feerate.h>
 #include <lightningd/hsm_control.h>
+#include <lightningd/jsonrpc.h>
 #include <lightningd/notification.h>
 #include <lightningd/peer_fd.h>
 #include <lightningd/peer_htlcs.h>
+#include <lightningd/plugin.h>
 #include <unistd.h>
 
 struct stfu_result
