@@ -495,6 +495,56 @@ const char *feature_name(const tal_t *ctx, size_t f)
 		NULL,
 		NULL,
 		NULL, /* 170/171 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 180/181 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 190/191 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 200/201 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 210/211 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 220/221 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 230/231 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 240/241 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 250/251 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 260/261 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		"option_pluggable_channel_factories", /* 270/271 — bLIP-56 */
 	};
 
 	if (f / 2 >= ARRAY_SIZE(fnames) || !fnames[f / 2])
