@@ -16,7 +16,11 @@ env:
   SLOW_MACHINE: 1
   # This is for the pytest-trackflaky:
   # CI_SERVER_URL: "http://35.239.136.52:3170"
-  PYTEST_OPTS_BASE: "-vvv --junit-xml=report.xml --timeout=1800 --durations=10"
+  # bLIP-56 fork: bumped --timeout from 1800 to 3600. The original 30-minute
+  # per-test timeout was set when CLN had fewer tests; under modern ASan/Valgrind
+  # instrumentation overhead, some tests legitimately need 30-60 minutes
+  # (e.g. test_grpc_custommsg_notification, test_graceful_htlc).
+  PYTEST_OPTS_BASE: "-vvv --junit-xml=report.xml --timeout=3600 --durations=10"
   TEST_LOG_IGNORE_ERRORS: "1"
   SCCACHE_GHA_ENABLED: "true"
 
