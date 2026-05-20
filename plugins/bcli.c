@@ -69,6 +69,12 @@ struct bitcoind {
 
 	/* Override initialblockdownload (using canned blocks sets this) */
 	bool dev_ignore_ibd;
+
+	/* Override to force fake_fees on networks other than regtest.
+	 * Set via --dev-force-fake-fees=true on testing nodes (testnet4
+	 * or fresh signet where estimatesmartfee returns "Insufficient
+	 * data"). Never set on mainnet. */
+	bool dev_force_fake_fees;
 };
 
 static struct bitcoind *bitcoind;
@@ -1131,8 +1137,12 @@ static const char *init(struct command *init_cmd, const char *buffer UNUSED,
 {
 	wait_and_check_bitcoind(init_cmd->plugin);
 
-	/* Usually we fake up fees in regtest */
-	if (streq(chainparams->network_name, "regtest"))
+	/* Usually we fake up fees in regtest. Allow override on test
+	 * networks where bitcoind's estimatesmartfee hasn't warmed up
+	 * (testnet4, fresh signet) via the dev-force-fake-fees plugin
+	 * option. dev_no_fake_fees still takes precedence to disable. */
+	if (streq(chainparams->network_name, "regtest")
+	    || bitcoind->dev_force_fake_fees)
 		bitcoind->fake_fees = !bitcoind->dev_no_fake_fees;
 	else
 		bitcoind->fake_fees = false;
@@ -1189,6 +1199,7 @@ static struct bitcoind *new_bitcoind(const tal_t *ctx)
 	bitcoind->rpcclienttimeout = 60;
 	bitcoind->dev_no_fake_fees = false;
 	bitcoind->dev_ignore_ibd = false;
+	bitcoind->dev_force_fake_fees = false;
 
 	return bitcoind;
 }
@@ -1244,5 +1255,11 @@ int main(int argc, char *argv[])
 				      "bool",
 				      "Never tell lightningd we're doing initial block download",
 				      bool_option, NULL, &bitcoind->dev_ignore_ibd),
+		    plugin_option("dev-force-fake-fees",
+				      "bool",
+				      "Force fake_fees=true on non-regtest networks "
+				      "(e.g. testnet4 where estimatesmartfee returns "
+				      "no estimates). Never set on mainnet.",
+				      bool_option, NULL, &bitcoind->dev_force_fake_fees),
 		    NULL);
 }
