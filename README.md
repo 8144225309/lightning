@@ -336,5 +336,5 @@ Developers wishing to contribute should start with the developer guide [here](do
 [dockerhub]: https://hub.docker.com/r/elementsproject/lightningd/
 [jsonrpcspec]: https://www.jsonrpc.org/specification
 [helpme-github]: https://github.com/lightningd/plugins/tree/master/helpme
-[actions-badge]: https://github.com/ElementsProject/lightning/workflows/Continuous%20Integration/badge.svg
-[actions]: https://github.com/ElementsProject/lightning/actions
+[actions-badge]: https://github.com/8144225309/lightning/actions/workflows/ci.yaml/badge.svg?branch=blip-56
+[actions]: https://github.com/8144225309/lightning/actions?query=branch%3Ablip-56
