@@ -45,8 +45,9 @@ jobs:
           fetch-depth: 0
 
       - name: Rebase
-        # We can't rebase if we're on master already.
-        if: github.ref != 'refs/heads/master'
+        # Only meaningful for pull_request events (which have a base_ref).
+        # Skip on push events (base_ref is empty) and on master (no parent).
+        if: github.event_name == 'pull_request' && github.ref != 'refs/heads/master'
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
