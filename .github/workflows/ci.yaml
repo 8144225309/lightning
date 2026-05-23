@@ -11,6 +11,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Explicit token scopes for GITHUB_TOKEN. Without this block, the default
+# scope on push events is narrower than on pull_request events, and the
+# sccache action (which uses the GH Actions cache API) gets HTTP 401
+# "Bad credentials". `actions: write` covers both sccache cache writes
+# and upload-artifact / download-artifact. `contents: read` covers
+# Checkout.
+permissions:
+  contents: read
+  actions: write
+
 env:
   # Reduce size, helps upload-artifact work more reliably
   RUST_PROFILE: small
