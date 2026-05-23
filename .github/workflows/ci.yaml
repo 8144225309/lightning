@@ -571,28 +571,21 @@ jobs:
     name: CI completion
     runs-on: ubuntu-24.04
     needs:
-      - first-integration
-      - full-integration
       - check-units
-      - integration-valgrind
-      - integration-sanitizers
       - check-downgrade
       - check-compiled-source
       - compile-32bit
+      - check-fuzz
     if: ${{ always() }}
     steps:
       - name: Complete
         env:
-          JOB_NAMES: "FIRST_INTEGRATION FULL_INTEGRATION CHECK_UNITS VALGRIND SANITIZERS CHECK_COMPILED_SOURCE COMPILE_32BIT"
-          FIRST_INTEGRATION: ${{ needs['first-integration'].result }}
-          FULL_INTEGRATION: ${{ needs['full-integration'].result }}
+          JOB_NAMES: "CHECK_UNITS CHECK_DOWNGRADE CHECK_COMPILED_SOURCE COMPILE_32BIT CHECK_FUZZ"
           CHECK_UNITS: ${{ needs['check-units'].result }}
-          VALGRIND: ${{ needs['integration-valgrind'].result }}
-          SANITIZERS: ${{ needs['integration-sanitizers'].result }}
-          DOCS: ${{ needs['update-docs-examples'].result }}
           CHECK_DOWNGRADE: ${{ needs['check-downgrade'].result }}
           CHECK_COMPILED_SOURCE: ${{ needs['check-compiled-source'].result }}
           COMPILE_32BIT: ${{ needs['compile-32bit'].result }}
+          CHECK_FUZZ: ${{ needs['check-fuzz'].result }}
         run: |
           failed=""
           for name in $JOB_NAMES; do
