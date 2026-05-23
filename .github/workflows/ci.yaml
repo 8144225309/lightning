@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "master"
+      - "blip-56"
   pull_request:
     types: [opened, synchronize, edited]
 concurrency:
