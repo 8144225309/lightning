@@ -441,11 +441,21 @@ GRPC_GEN = \
 
 ALL_TEST_GEN += $(GRPC_GEN)
 
+# Gated by SUPPRESS_GENERATION because the protoc + sed sequence is not
+# atomic from an external observer's perspective: under `make -j N`,
+# `check-wire-format`'s `git diff --exit-code HEAD` can interleave between
+# protoc (which writes the pre-sed `import X_pb2 ...` form) and sed (which
+# rewrites to `from pyln.grpc import X_pb2 ...`). CI uses SUPPRESS_GENERATION=1
+# precisely so committed generated files are not re-derived; gating this rule
+# follows the same pattern used by every other generated file in this Makefile.
+# Run `make $(GRPC_GEN)` explicitly without SUPPRESS_GENERATION to regenerate.
+ifneq ($(SUPPRESS_GENERATION),1)
 $(GRPC_GEN) &: cln-grpc/proto/node.proto cln-grpc/proto/primitives.proto
 	$(PYTHON) -m grpc_tools.protoc -I cln-grpc/proto cln-grpc/proto/node.proto --python_out=$(GRPC_PATH)/ --grpc_python_out=$(GRPC_PATH)/ --experimental_allow_proto3_optional
 	$(PYTHON) -m grpc_tools.protoc -I cln-grpc/proto cln-grpc/proto/primitives.proto --python_out=$(GRPC_PATH)/ --experimental_allow_proto3_optional
 	find $(GRPC_DIR)/ -type f -name "*.py" -print0 | xargs -0 $(SED) -i'.bak' -e 's/^import \(.*\)_pb2 as .*__pb2/from pyln.grpc import \1_pb2 as \1__pb2/g'
 	find $(GRPC_DIR)/ -type f -name "*.py.bak" -print0 | xargs -0 rm -f
+endif
 
 # We make pretty much everything depend on these.
 ALL_GEN_HEADERS := $(filter %gen.h,$(ALL_C_HEADERS))
