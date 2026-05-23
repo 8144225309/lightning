@@ -140,6 +140,16 @@ static const struct feature_style feature_styles[] = {
 	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
 			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT,
 			  [CHANNEL_FEATURE] = FEATURE_DONT_REPRESENT} },
+	/* bLIP-56 #9: 270/271 pluggable_channel_factories — advertised in
+	 * init + node_announcement so factory-aware peers discover each other. */
+	{ OPT_PLUGGABLE_CHANNEL_FACTORIES,
+	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT } },
+	/* Cooperative channel restore — advertised in init + node_announcement
+	 * so peers can opt in to state handoff instead of SCB force-close. */
+	{ OPT_COOPERATIVE_CHANNEL_RESTORE,
+	  .copy_style = { [INIT_FEATURE] = FEATURE_REPRESENT,
+			  [NODE_ANNOUNCE_FEATURE] = FEATURE_REPRESENT } },
 };
 
 struct dependency {
@@ -486,6 +496,57 @@ const char *feature_name(const tal_t *ctx, size_t f)
 		NULL,
 		NULL,
 		NULL, /* 170/171 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 180/181 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 190/191 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 200/201 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 210/211 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 220/221 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 230/231 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 240/241 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 250/251 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL, /* 260/261 */
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		"option_pluggable_channel_factories", /* 270/271 — bLIP-56 */
+		"option_cooperative_channel_restore", /* 272/273 */
 	};
 
 	if (f / 2 >= ARRAY_SIZE(fnames) || !fnames[f / 2])

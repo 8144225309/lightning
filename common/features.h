@@ -154,4 +154,11 @@ struct feature_set *feature_set_dup(const tal_t *ctx,
 
 #define OPT_SHUTDOWN_WRONG_FUNDING		104
 
+/* bLIP-56: Pluggable Channel Factories */
+#define OPT_PLUGGABLE_CHANNEL_FACTORIES	270
+
+/* Cooperative channel restore (Issue #2) */
+#define OPT_COOPERATIVE_CHANNEL_RESTORE	272
+
 #endif /* LIGHTNING_COMMON_FEATURES_H */
+

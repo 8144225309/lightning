@@ -57,6 +57,7 @@ static bool unknown_type(enum peer_wire t)
 	case WIRE_SPLICE:
 	case WIRE_SPLICE_ACK:
 	case WIRE_SPLICE_LOCKED:
+	case WIRE_COOPERATIVE_RESTORE_RESPONSE:
 		return false;
 	}
 	return true;
@@ -118,6 +119,7 @@ bool is_msg_for_gossipd(const u8 *cursor)
 	case WIRE_SPLICE:
 	case WIRE_SPLICE_ACK:
 	case WIRE_SPLICE_LOCKED:
+	case WIRE_COOPERATIVE_RESTORE_RESPONSE:
 		break;
 	}
 	return false;
@@ -419,6 +421,12 @@ bool extract_channel_id(const u8 *in_pkt, struct channel_id *channel_id)
 		 * 1. type: 78 (`splice_locked`)
 		 * 2. data:
 		 *     * [`chain_hash`:`chain_hash`]
+		 *     * [`channel_id`:`channel_id`]
+		 */
+	case WIRE_COOPERATIVE_RESTORE_RESPONSE:
+		/* Cooperative restore response:
+		 * 1. type: 41042 (`cooperative_restore_response`)
+		 * 2. data:
 		 *     * [`channel_id`:`channel_id`]
 		 */
 		return fromwire_channel_id(&cursor, &max, channel_id);
