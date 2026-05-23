@@ -1382,6 +1382,28 @@ channel_fail_fallen_behind(struct channel *channel, const u8 *msg)
         channel_fallen_behind(channel);
 }
 
+static void
+channel_cooperative_restore_complete(struct channel *channel, const u8 *msg)
+{
+	u64 restored_commitment_number;
+
+	if (!fromwire_channeld_cooperative_restore_complete(
+			msg, &restored_commitment_number)) {
+		channel_internal_error(channel,
+			"bad channeld_cooperative_restore_complete %s",
+			tal_hex(tmpctx, msg));
+		return;
+	}
+
+	log_info(channel->log,
+		 "Cooperative restore completed at commitment %"PRIu64,
+		 restored_commitment_number);
+
+	/* Save updated state — the channel will reconnect with the
+	 * restored commitment state. */
+	wallet_channel_save(channel->peer->ld->wallet, channel);
+}
+
 static void peer_start_closingd_after_shutdown(struct channel *channel,
 					       const u8 *msg,
 					       const int *fds)
@@ -1624,6 +1646,9 @@ static unsigned channel_msg(struct subd *sd, const u8 *msg, const int *fds)
 		break;
 	case WIRE_CHANNELD_FAIL_FALLEN_BEHIND:
 		channel_fail_fallen_behind(sd->channel, msg);
+		break;
+	case WIRE_CHANNELD_COOPERATIVE_RESTORE_COMPLETE:
+		channel_cooperative_restore_complete(sd->channel, msg);
 		break;
 	case WIRE_CHANNELD_SEND_ERROR_REPLY:
 		handle_error_channel(sd->channel, msg);
