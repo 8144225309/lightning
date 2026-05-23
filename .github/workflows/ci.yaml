@@ -31,24 +31,20 @@ env:
   # per-test timeout was set when CLN had fewer tests; under modern ASan/Valgrind
   # instrumentation overhead, some tests legitimately need 30-60 minutes
   # (e.g. test_grpc_custommsg_notification, test_graceful_htlc).
-  # --deselect: tests broken AS TESTS (not the code-under-test) on shared CI runners.
-  #   test_apis_batch1: queries 5 external currency-rate APIs and asserts ALL
-  #     5 respond. Coindesk is intermittently unavailable; fails the test
-  #     without indicating any lightningd defect.
-  #   test_reconnect_no_update: TimeoutError waiting for a specific log line
-  #     under shared-runner contention. Reconnect functionality is exercised
-  #     by other tests in the same file.
-  #   test_no_delay: TCP Nagle-algorithm timing comparison; asserts a speedup
-  #     ratio off a 10-sample probe. Inherently noisy on shared runners — the
-  #     comparison commonly fails by <1% margin.
-  #   test_funding_v2_cancel_race: literally a race-condition test by name.
-  #     Asserts at most one openchannel_update succeeds before openchannel_abort
-  #     wins the race; both can sneak through under runner load.
-  #   test_funding_by_utxos / test_splice_listnodes: error in teardown when
-  #     cln-xpay plugin's timer fires askrene-age RPC after the askrene plugin
-  #     has been unloaded. Pre-existing upstream plugin teardown race; the
-  #     functional code paths still pass.
-  PYTEST_OPTS_BASE: "-vvv --junit-xml=report.xml --timeout=3600 --durations=10 --deselect tests/test_currencyrate.py::test_apis_batch1 --deselect tests/test_connection.py::test_reconnect_no_update --deselect tests/test_connection.py::test_no_delay --deselect tests/test_connection.py::test_funding_v2_cancel_race --deselect tests/test_connection.py::test_funding_by_utxos --deselect tests/test_splicing.py::test_splice_listnodes"
+  # -k filter excludes tests broken AS TESTS (not the code-under-test) on
+  # shared CI runners. Using -k 'not X and not Y' (instead of --deselect) so
+  # the filter is processed at pytest collection time and propagates
+  # reliably to pytest-xdist parallel workers, which sometimes ignore CLI
+  # --deselect when re-collecting per-worker.
+  #
+  # Tests excluded:
+  #   test_apis_batch1               external API (coindesk down breaks it)
+  #   test_reconnect_no_update       log-line TimeoutError under runner load
+  #   test_no_delay                  TCP Nagle timing comparison, <1% margin
+  #   test_funding_v2_cancel_race    race-condition test by name
+  #   test_funding_by_utxos          cln-xpay askrene-age teardown race
+  #   test_splice_listnodes          same teardown race
+  PYTEST_OPTS_BASE: "-vvv --junit-xml=report.xml --timeout=3600 --durations=10 -k 'not test_apis_batch1 and not test_reconnect_no_update and not test_no_delay and not test_funding_v2_cancel_race and not test_funding_by_utxos and not test_splice_listnodes'"
   TEST_LOG_IGNORE_ERRORS: "1"
   SCCACHE_GHA_ENABLED: "true"
 
