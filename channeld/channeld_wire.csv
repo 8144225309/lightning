@@ -344,6 +344,10 @@ msgdata,channeld_dev_memleak_reply,leak,bool,
 # Peer presented proof it was from the future.
 msgtype,channeld_fail_fallen_behind,1028
 
+# Cooperative restore succeeded: peer sent us their latest state.
+msgtype,channeld_cooperative_restore_complete,1029
+msgdata,channeld_cooperative_restore_complete,restored_commitment_number,u64,
+
 # When we receive announcement_signatures for channel announce
 msgtype,channeld_got_announcement,1017
 msgdata,channeld_got_announcement,scid,short_channel_id,
