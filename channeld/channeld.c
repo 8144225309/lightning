@@ -5491,7 +5491,6 @@ static void check_future_dataloss_fields(struct peer *peer,
 		u64 latest_commitment_number;
 		u8 per_commitment_secret[32];
 		u8 *signed_commitment_tx;
-		u16 signed_commitment_tx_len;
 
 		status_info("Peer supports cooperative restore and "
 			    "included restore data in reestablish. "
