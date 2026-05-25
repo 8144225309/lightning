@@ -1039,6 +1039,8 @@ static struct channel *handle_init(struct info *info, const u8 *init_msg)
 	struct feature_set *our_features;
 	u32 *hsm_capabilities;
 	struct channel_id channel_id;
+	struct node_id peer_id;
+	u64 channel_dbid;
 	struct basepoints points[NUM_SIDES];
 	struct amount_sat funding_sats;
 	struct amount_msat local_msat;
@@ -1087,6 +1089,8 @@ static struct channel *handle_init(struct info *info, const u8 *init_msg)
 				    &our_features,
 				    &hsm_capabilities,
 				    &channel_id,
+				    &peer_id,
+				    &channel_dbid,
 				    &funding,
 				    &funding_sats,
 				    &minimum_depth,

@@ -10,6 +10,7 @@
 #include <common/derive_basepoints.h>
 #include <common/features.h>
 #include <common/fee_states.h>
+#include <common/node_id.h>
 #include <wire/peer_wire.h>
 
 # Begin!  (passes gossipd-client fd)
@@ -19,6 +20,8 @@ msgdata,channeld_init,our_features,feature_set,
 msgdata,channeld_init,num_hsm_capabilities,u16,
 msgdata,channeld_init,hsm_capabilities,u32,num_hsm_capabilities
 msgdata,channeld_init,channel_id,channel_id,
+msgdata,channeld_init,peer_id,node_id,
+msgdata,channeld_init,channel_dbid,u64,
 msgdata,channeld_init,funding,bitcoin_outpoint,
 msgdata,channeld_init,funding_satoshi,amount_sat,
 msgdata,channeld_init,minimum_depth,u32,
@@ -347,6 +350,10 @@ msgtype,channeld_fail_fallen_behind,1028
 # Cooperative restore succeeded: peer sent us their latest state.
 msgtype,channeld_cooperative_restore_complete,1029
 msgdata,channeld_cooperative_restore_complete,restored_commitment_number,u64,
+msgdata,channeld_cooperative_restore_complete,per_commitment_secret,secret,
+msgdata,channeld_cooperative_restore_complete,commit_sig,bitcoin_signature,
+msgdata,channeld_cooperative_restore_complete,signed_commitment_tx_len,u16,
+msgdata,channeld_cooperative_restore_complete,signed_commitment_tx,u8,signed_commitment_tx_len
 
 # When we receive announcement_signatures for channel announce
 msgtype,channeld_got_announcement,1017

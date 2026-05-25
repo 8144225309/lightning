@@ -11,9 +11,12 @@
  *    limits, unlikely as that is.
  */
 #include "config.h"
+#include <bitcoin/shadouble.h>
+#include <bitcoin/psbt.h>
 #include <bitcoin/script.h>
 #include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
+#include <ccan/crypto/sha256/sha256.h>
 #include <ccan/mem/mem.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld.h>
@@ -27,6 +30,7 @@
 #include <common/key_derive.h>
 #include <common/memleak.h>
 #include <common/msg_queue.h>
+#include <common/node_id.h>
 #include <common/onionreply.h>
 #include <common/peer_billboard.h>
 #include <common/peer_failed.h>
@@ -34,6 +38,7 @@
 #include <common/per_peer_state.h>
 #include <common/psbt_internal.h>
 #include <common/psbt_open.h>
+#include <common/randbytes.h>
 #include <common/read_peer_msg.h>
 #include <common/status.h>
 #include <common/subdaemon.h>
@@ -44,6 +49,7 @@
 #include <fcntl.h>
 #include <hsmd/hsmd_wiregen.h>
 #include <inttypes.h>
+#include <secp256k1_recovery.h>
 #include <wire/wire_sync.h>
 
 /* stdin == requests, 3 == peer, 4 = HSM */
@@ -112,6 +118,8 @@ struct peer {
 	u64 htlc_id;
 
 	struct channel_id channel_id;
+	struct node_id peer_id;
+	u64 channel_dbid;
 	struct channel *channel;
 
 	/* Messages from master: we queue them since we might be
@@ -1709,6 +1717,9 @@ static void send_revocation(struct peer *peer,
 					       splice_commitsigs);
 	master_wait_sync_reply(tmpctx, peer, take(msg_for_master),
 			       WIRE_CHANNELD_GOT_COMMITSIG_REPLY);
+
+	/* Keep latest remote commit_sig for cooperative restore. */
+	peer->their_commit_sig = *commit_sig;
 
 	/* Now that the master has persisted the new commitment advance the HSMD
 	 * and fetch the revocation secret for the old one. */
@@ -5436,6 +5447,148 @@ static void resend_commitment(struct peer *peer, struct changed_htlc *last)
 			       peer->revocations_received);
 }
 
+#define COOP_RESTORE_SIGN_PREFIX "cooperative_restore:"
+#define COOP_RESTORE_MSG_LEN \
+	((sizeof(COOP_RESTORE_SIGN_PREFIX) - 1) + sizeof(struct channel_id) + 32)
+
+static void cooperative_restore_build_msg(u8 out[COOP_RESTORE_MSG_LEN],
+					 const struct channel_id *channel_id,
+					 const u8 nonce[32])
+{
+	memcpy(out, COOP_RESTORE_SIGN_PREFIX,
+	       sizeof(COOP_RESTORE_SIGN_PREFIX) - 1);
+	memcpy(out + sizeof(COOP_RESTORE_SIGN_PREFIX) - 1,
+	       channel_id, sizeof(*channel_id));
+	memcpy(out + sizeof(COOP_RESTORE_SIGN_PREFIX) - 1 + sizeof(*channel_id),
+	       nonce, 32);
+}
+
+static void cooperative_restore_msg_hash(struct sha256_double *hash,
+					  const struct channel_id *channel_id,
+					  const u8 nonce[32])
+{
+	struct sha256_ctx ctx = SHA256_INIT;
+	u8 msg[COOP_RESTORE_MSG_LEN];
+
+	cooperative_restore_build_msg(msg, channel_id, nonce);
+	sha256_update(&ctx, "Lightning Signed Message:",
+		      sizeof("Lightning Signed Message:") - 1);
+	sha256_update(&ctx, msg, sizeof(msg));
+	sha256_double_done(&ctx, hash);
+}
+
+static bool cooperative_restore_signature_ok(const struct node_id *peer_id,
+					   const struct channel_id *channel_id,
+					   const u8 nonce[32],
+					   const secp256k1_ecdsa_signature *sig)
+{
+	struct sha256_double hash;
+
+	cooperative_restore_msg_hash(&hash, channel_id, nonce);
+	return check_signed_hash_nodeid(&hash, sig, peer_id);
+}
+
+static bool cooperative_restore_sign_nonce(const struct peer *peer,
+					 u8 nonce[32],
+					 secp256k1_ecdsa_signature *sig)
+{
+	secp256k1_ecdsa_recoverable_signature rsig;
+	const u8 *reply;
+	u8 msg[COOP_RESTORE_MSG_LEN];
+	u8 *msg_tal;
+
+	cooperative_restore_build_msg(msg, &peer->channel_id, nonce);
+	msg_tal = tal_dup_arr(tmpctx, u8, msg, sizeof(msg), 0);
+	reply = hsm_req(tmpctx,
+			take(towire_hsmd_sign_message(NULL, msg_tal)));
+	if (!fromwire_hsmd_sign_message_reply(reply, &rsig))
+		return false;
+
+	secp256k1_ecdsa_recoverable_signature_convert(secp256k1_ctx, sig, &rsig);
+	return true;
+}
+
+static bool extract_commitment_witness_sigs(
+	const struct wally_tx_witness_stack *witness,
+	struct bitcoin_signature *sig1,
+	struct bitcoin_signature *sig2)
+{
+	if (!witness || witness->num_items < 3)
+		return false;
+	if (!signature_from_der(witness->items[1].witness,
+				witness->items[1].witness_len, sig1))
+		return false;
+	if (!signature_from_der(witness->items[2].witness,
+				witness->items[2].witness_len, sig2))
+		return false;
+
+	return true;
+}
+
+static bool verify_signed_commitment_tx(struct peer *peer,
+				       const struct bitcoin_tx *tx,
+				       u64 expected_commitment_number,
+				       struct bitcoin_signature *remote_commit_sig)
+{
+	struct bitcoin_outpoint outpoint;
+	const struct wally_tx_witness_stack *witness;
+	struct bitcoin_signature sig1, sig2;
+	const u8 *funding_wscript;
+	const u8 *funding_scriptpubkey;
+	struct bitcoin_tx tx_with_psbt;
+	const struct bitcoin_tx *sig_tx = tx;
+	bool sig1_local, sig1_remote, sig2_local, sig2_remote;
+	u64 obscured_commitment_number;
+
+	if (tx->wtx->num_inputs < 1)
+		return false;
+
+	bitcoin_tx_input_get_outpoint(tx, 0, &outpoint);
+	if (!bitcoin_outpoint_eq(&outpoint, &peer->channel->funding))
+		return false;
+
+	obscured_commitment_number
+		= ((u64)(tx->wtx->locktime & 0x00FFFFFF)
+		   | ((u64)(tx->wtx->inputs[0].sequence & 0x00FFFFFF) << 24));
+	if ((obscured_commitment_number
+	     ^ peer->channel->commitment_number_obscurer)
+	    != expected_commitment_number) {
+		return false;
+	}
+
+	witness = tx->wtx->inputs[0].witness;
+	if (!extract_commitment_witness_sigs(witness, &sig1, &sig2))
+		return false;
+
+	funding_wscript = bitcoin_redeem_2of2(tmpctx,
+					 &peer->channel->funding_pubkey[LOCAL],
+					 &peer->channel->funding_pubkey[REMOTE]);
+	if (!tx->psbt) {
+		tx_with_psbt = *tx;
+		tx_with_psbt.psbt = new_psbt(tmpctx, tx->wtx);
+		funding_scriptpubkey = scriptpubkey_p2wsh(tmpctx, funding_wscript);
+		psbt_input_set_wit_utxo(tx_with_psbt.psbt, 0,
+					funding_scriptpubkey,
+					peer->channel->funding_sats);
+		sig_tx = &tx_with_psbt;
+	}
+
+	sig1_local = check_tx_sig(sig_tx, 0, NULL, funding_wscript,
+				  &peer->channel->funding_pubkey[LOCAL], &sig1);
+	sig1_remote = check_tx_sig(sig_tx, 0, NULL, funding_wscript,
+				   &peer->channel->funding_pubkey[REMOTE], &sig1);
+	sig2_local = check_tx_sig(sig_tx, 0, NULL, funding_wscript,
+				  &peer->channel->funding_pubkey[LOCAL], &sig2);
+	sig2_remote = check_tx_sig(sig_tx, 0, NULL, funding_wscript,
+				   &peer->channel->funding_pubkey[REMOTE], &sig2);
+
+	if (!((sig1_local && sig2_remote) || (sig1_remote && sig2_local)))
+		return false;
+
+	*remote_commit_sig = sig1_remote ? sig1 : sig2;
+	return true;
+}
+
 /* BOLT #2:
  *
  * A receiving node:
@@ -5489,8 +5642,14 @@ static void check_future_dataloss_fields(struct peer *peer,
 	    && recv_tlvs->cooperative_restore) {
 		struct channel_id channel_id;
 		u64 latest_commitment_number;
-		u8 per_commitment_secret[32];
+		struct secret per_commitment_secret;
 		u8 *signed_commitment_tx;
+		const u8 *cursor;
+		size_t max;
+		struct bitcoin_tx *commit_tx;
+		struct bitcoin_signature remote_commit_sig;
+		struct privkey privkey;
+		struct pubkey per_commit_point;
 
 		status_info("Peer supports cooperative restore and "
 			    "included restore data in reestablish. "
@@ -5509,7 +5668,7 @@ static void check_future_dataloss_fields(struct peer *peer,
 		if (!fromwire_cooperative_restore_response(tmpctx, msg,
 				&channel_id,
 				&latest_commitment_number,
-				per_commitment_secret,
+				&per_commitment_secret,
 				&signed_commitment_tx)) {
 			status_info("Bad cooperative_restore_response; "
 				    "falling back to SCB.");
@@ -5522,12 +5681,35 @@ static void check_future_dataloss_fields(struct peer *peer,
 			goto fallback_scb;
 		}
 
-		/* TODO: Verify the signed commitment TX against the
-		 * funding outpoint (2-of-2 signature check).
-		 * For now, we trust the peer's response if the
-		 * per_commitment_secret validates — they already have
-		 * the ability to force-close, so sending us state
-		 * imposes no new trust requirement. */
+		memcpy(&privkey, &per_commitment_secret, sizeof(privkey));
+		if (!pubkey_from_privkey(&privkey, &per_commit_point)) {
+			status_info("Invalid cooperative_restore per_commitment_secret; "
+				    "falling back to SCB.");
+			goto fallback_scb;
+		}
+
+		if (!signed_commitment_tx) {
+			status_info("Missing signed_commitment_tx; "
+				    "falling back to SCB.");
+			goto fallback_scb;
+		}
+
+		cursor = signed_commitment_tx;
+		max = tal_count(signed_commitment_tx);
+		commit_tx = pull_bitcoin_tx_only(tmpctx, &cursor, &max);
+		if (!commit_tx || max != 0) {
+			status_info("Bad signed_commitment_tx; "
+				    "falling back to SCB.");
+			goto fallback_scb;
+		}
+
+		if (!verify_signed_commitment_tx(peer, commit_tx,
+						latest_commitment_number,
+						&remote_commit_sig)) {
+			status_info("Invalid signed_commitment_tx; "
+				    "falling back to SCB.");
+			goto fallback_scb;
+		}
 
 		status_info("Cooperative restore succeeded: "
 			    "restored to commitment %"PRIu64,
@@ -5536,19 +5718,19 @@ static void check_future_dataloss_fields(struct peer *peer,
 		/* Tell master about the successful restore */
 		wire_sync_write(MASTER_FD,
 			take(towire_channeld_cooperative_restore_complete(
-				NULL, latest_commitment_number)));
+				NULL, latest_commitment_number,
+				&per_commitment_secret,
+				&remote_commit_sig,
+				signed_commitment_tx)));
 
 		peer_billboard(true,
 			"Cooperative restore completed at commitment %"PRIu64,
 			latest_commitment_number);
 
-		/* Note: The channel will need to be re-established with
-		 * the restored state. For now, we exit cleanly and let
-		 * lightningd handle the state update + reconnection.
-		 * This is safer than trying to hot-swap state in memory. */
-		peer_failed_err(peer->pps, &peer->channel_id,
-			"Cooperative restore complete — reconnecting "
-			"with restored state");
+		/* Drop the connection without sending an error so the peer
+		 * doesn't force-close; lightningd will reconnect with the
+		 * restored state. */
+		peer_failed_connection_lost();
 	}
 
 fallback_scb:
@@ -5836,12 +6018,16 @@ static void peer_reconnect(struct peer *peer,
 		send_tlvs->cooperative_restore
 			= talz(send_tlvs,
 			       struct tlv_channel_reestablish_tlvs_cooperative_restore);
-		/* Nonce: for now use all zeros as a placeholder.
-		 * TODO: Generate a proper random nonce and sign it
-		 * with our node_id key to prove liveness. */
-		memset(send_tlvs->cooperative_restore->nonce, 0, 32);
-		memset(&send_tlvs->cooperative_restore->node_signature, 0,
-		       sizeof(send_tlvs->cooperative_restore->node_signature));
+		randbytes(send_tlvs->cooperative_restore->nonce, 32);
+		if (!cooperative_restore_sign_nonce(
+				peer,
+				send_tlvs->cooperative_restore->nonce,
+				&send_tlvs->cooperative_restore->node_signature)) {
+			status_info("Failed to sign cooperative restore nonce; "
+				    "omitting TLV");
+			tal_free(send_tlvs->cooperative_restore);
+			send_tlvs->cooperative_restore = NULL;
+		}
 	}
 
 	status_debug("Sending channel_reestablish with"
@@ -6120,6 +6306,16 @@ static void peer_reconnect(struct peer *peer,
 			struct secret old_secret;
 			struct pubkey unused_point;
 			u8 *restore_msg;
+			u64 commitment_number;
+			struct pubkey local_per_commit_point;
+			struct bitcoin_tx **txs;
+			const struct htlc **htlc_map;
+			const u8 *funding_wscript;
+			int remote_anchor_outnum;
+			struct bitcoin_signature local_sig;
+			u8 **witness;
+			u8 *signed_commitment_tx;
+			const u8 *sign_reply;
 
 			status_info("Peer lost state (revocation %"PRIu64
 				    " vs our %"PRIu64") and requests "
@@ -6127,35 +6323,88 @@ static void peer_reconnect(struct peer *peer,
 				    next_revocation_number,
 				    peer->next_index[LOCAL] - 1);
 
-			/* TODO: Verify the nonce signature in
-			 * recv_tlvs->cooperative_restore against the
-			 * peer's node_id to prove liveness. */
+			if (!cooperative_restore_signature_ok(
+					&peer->peer_id,
+					&peer->channel_id,
+					recv_tlvs->cooperative_restore->nonce,
+					&recv_tlvs->cooperative_restore->node_signature)) {
+				status_info("Invalid cooperative_restore signature; "
+					    "ignoring request.");
+				goto restore_done;
+			}
+
+			commitment_number = peer->next_index[LOCAL] - 1;
+			if (commitment_number == 0) {
+				status_info("Cannot build restore tx at commitment 0");
+				goto restore_done;
+			}
+
+			get_per_commitment_point(commitment_number,
+						 &local_per_commit_point);
+
+			txs = channel_txs(tmpctx, &peer->channel->funding,
+					 peer->channel->funding_sats,
+					 &htlc_map, NULL, &funding_wscript,
+					 peer->channel,
+					 &local_per_commit_point,
+					 commitment_number, LOCAL,
+					 0, 0,
+					 &remote_anchor_outnum, NULL);
+			if (!txs) {
+				status_info("Failed to build commitment tx for restore");
+				goto restore_done;
+			}
+
+			if (!check_tx_sig(txs[0], 0, NULL, funding_wscript,
+					  &peer->channel->funding_pubkey[REMOTE],
+					  &peer->their_commit_sig)) {
+				status_info("Bad commit_sig for restore commitment tx");
+				goto restore_done;
+			}
+
+			sign_reply = hsm_req(tmpctx, take(
+				towire_hsmd_sign_commitment_tx(NULL,
+					&peer->peer_id,
+					peer->channel_dbid,
+					txs[0],
+					&peer->channel->funding_pubkey[REMOTE],
+					commitment_number)));
+			if (!fromwire_hsmd_sign_commitment_tx_reply(sign_reply,
+								   &local_sig)) {
+				status_failed(STATUS_FAIL_HSM_IO,
+					"Bad sign_commitment_tx_reply: %s",
+					tal_hex(tmpctx, sign_reply));
+			}
+
+			witness = bitcoin_witness_2of2(tmpctx,
+						      &peer->their_commit_sig,
+						      &local_sig,
+						      &peer->channel->funding_pubkey[REMOTE],
+						      &peer->channel->funding_pubkey[LOCAL]);
+			bitcoin_tx_input_set_witness(txs[0], 0, take(witness));
+			signed_commitment_tx = linearize_tx(tmpctx, txs[0]);
 
 			/* Get the per_commitment_secret for N-1 so the
 			 * recovering peer can verify we're not lying. */
-			revoke_commitment(peer->next_index[LOCAL] - 2,
+			revoke_commitment(commitment_number - 1,
 					  &old_secret, &unused_point);
 
-			/* Build and send the restore response.
-			 * For now, send an empty commitment TX — the
-			 * recovering side uses the commitment number +
-			 * secret to validate and will request full state
-			 * via normal reestablish after reconnection. */
+			/* Build and send the restore response with a signed commitment tx. */
 			restore_msg = towire_cooperative_restore_response(
 				NULL,
 				&peer->channel_id,
-				peer->next_index[LOCAL] - 1,
-				old_secret.data,
-				/* signed_commitment_tx: placeholder for
-				 * full commitment TX serialization. */
-				NULL);
+				commitment_number,
+				&old_secret,
+				signed_commitment_tx);
 
 			peer_write(peer->pps, take(restore_msg));
 
 			status_info("Sent cooperative_restore_response "
 				    "with commitment %"PRIu64,
-				    peer->next_index[LOCAL] - 1);
+				    commitment_number);
 		}
+
+restore_done:
 
 		/* Send a warning here!  Because this is what it looks like if peer is
 		 * in the past, and they might still recover.
@@ -6954,6 +7203,8 @@ static void init_channel(struct peer *peer)
 				    &peer->our_features,
 				    &peer->hsm_capabilities,
 				    &peer->channel_id,
+				    &peer->peer_id,
+				    &peer->channel_dbid,
 				    &funding,
 				    &funding_sats,
 				    &minimum_depth,

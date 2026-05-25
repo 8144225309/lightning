@@ -105,6 +105,7 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 	case WIRE_HSMD_CANNOUNCEMENT_SIG_REQ:
 	case WIRE_HSMD_CUPDATE_SIG_REQ:
 	case WIRE_HSMD_NODE_ANNOUNCEMENT_SIG_REQ:
+	case WIRE_HSMD_SIGN_MESSAGE:
 		return (client->capabilities & HSM_PERM_SIGN_GOSSIP) != 0;
 
 	case WIRE_HSMD_SIGN_DELAYED_PAYMENT_TO_US:
@@ -127,6 +128,9 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 	case WIRE_HSMD_SIGN_MUTUAL_CLOSE_TX:
 		return (client->capabilities & HSM_PERM_SIGN_CLOSING_TX) != 0;
 
+	case WIRE_HSMD_SIGN_COMMITMENT_TX:
+		return (client->capabilities & HSM_PERM_SIGN_COMMITMENT_TX) != 0;
+
 	case WIRE_HSMD_SIGN_SPLICE_TX:
 		return (client->capabilities & HSM_PERM_SIGN_SPLICE_TX) != 0;
 
@@ -145,10 +149,8 @@ bool hsmd_check_client_capabilities(struct hsmd_client *client,
 	case WIRE_HSMD_CLIENT_HSMFD:
 	case WIRE_HSMD_SIGN_WITHDRAWAL:
 	case WIRE_HSMD_SIGN_INVOICE:
-	case WIRE_HSMD_SIGN_COMMITMENT_TX:
 	case WIRE_HSMD_GET_CHANNEL_BASEPOINTS:
 	case WIRE_HSMD_DEV_MEMLEAK:
-	case WIRE_HSMD_SIGN_MESSAGE:
 	case WIRE_HSMD_BIP137_SIGN_MESSAGE:
 	case WIRE_HSMD_GET_OUTPUT_SCRIPTPUBKEY:
 	case WIRE_HSMD_SIGN_BOLT12:

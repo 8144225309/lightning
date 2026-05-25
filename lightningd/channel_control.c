@@ -1,9 +1,11 @@
 #include "config.h"
+#include <bitcoin/tx.h>
 #include <ccan/asort/asort.h>
 #include <ccan/cast/cast.h>
 #include <ccan/tal/str/str.h>
 #include <channeld/channeld_wiregen.h>
 #include <common/daemon.h>
+#include <common/derive_basepoints.h>
 #include <common/json_command.h>
 #include <common/psbt_open.h>
 #include <common/shutdown_scriptpubkey.h>
@@ -1386,18 +1388,76 @@ static void
 channel_cooperative_restore_complete(struct channel *channel, const u8 *msg)
 {
 	u64 restored_commitment_number;
+	struct bitcoin_signature commit_sig;
+	struct secret per_commitment_secret;
+	u8 *signed_commitment_tx;
+	const u8 *cursor;
+	size_t max;
+	struct bitcoin_tx *last_tx;
 
 	if (!fromwire_channeld_cooperative_restore_complete(
-			msg, &restored_commitment_number)) {
+			msg, &restored_commitment_number, &per_commitment_secret,
+			&commit_sig,
+			&signed_commitment_tx)) {
 		channel_internal_error(channel,
 			"bad channeld_cooperative_restore_complete %s",
 			tal_hex(tmpctx, msg));
 		return;
 	}
 
+	if (!signed_commitment_tx) {
+		channel_internal_error(channel,
+			"missing signed_commitment_tx in cooperative restore");
+		return;
+	}
+
+	cursor = signed_commitment_tx;
+	max = tal_count(signed_commitment_tx);
+	last_tx = pull_bitcoin_tx_only(tmpctx, &cursor, &max);
+	if (!last_tx || max != 0) {
+		channel_internal_error(channel,
+			"bad signed_commitment_tx in cooperative restore");
+		return;
+	}
+
 	log_info(channel->log,
 		 "Cooperative restore completed at commitment %"PRIu64,
 		 restored_commitment_number);
+
+	if (restored_commitment_number == 0) {
+		channel_internal_error(channel,
+			"invalid restored_commitment_number 0");
+		return;
+	}
+
+	if (!wallet_shachain_add_hash(channel->peer->ld->wallet,
+				      &channel->their_shachain,
+				      shachain_index(restored_commitment_number - 1),
+				      &per_commitment_secret)) {
+		channel_internal_error(channel,
+			"bad per_commitment_secret for restore commitment %"PRIu64,
+			restored_commitment_number - 1);
+		return;
+	}
+
+	channel->next_index[LOCAL] = restored_commitment_number + 1;
+	if (channel->next_index[REMOTE] < restored_commitment_number + 1)
+		channel->next_index[REMOTE] = restored_commitment_number + 1;
+	channel_set_last_tx(channel, last_tx, &commit_sig);
+	channel->has_future_per_commitment_point = false;
+
+	/* Clear HTLC sigs from the previous commitment; they don't match the
+	 * restored tx and must not be used onchain. */
+	tal_free(channel->last_htlc_sigs);
+	channel->last_htlc_sigs = NULL;
+	wallet_htlc_sigs_save(channel->peer->ld->wallet,
+			      channel->dbid,
+			      channel->last_htlc_sigs);
+
+	if (channel->last_sent_commit)
+		tal_free(channel->last_sent_commit);
+	channel->last_sent_commit = NULL;
+	channel->last_was_revoke = false;
 
 	/* Save updated state — the channel will reconnect with the
 	 * restored commitment state. */
@@ -1777,6 +1837,7 @@ bool peer_start_channeld(struct channel *channel,
 				  | HSM_PERM_COMMITMENT_POINT
 				  | HSM_PERM_SIGN_REMOTE_TX
 				  | HSM_PERM_SIGN_ONCHAIN_TX
+			  | HSM_PERM_SIGN_COMMITMENT_TX
 				  | HSM_PERM_SIGN_CLOSING_TX
 				  | HSM_PERM_SIGN_SPLICE_TX
 				  | HSM_PERM_LOCK_OUTPOINT);
@@ -1933,6 +1994,8 @@ bool peer_start_channeld(struct channel *channel,
 				       /* Capabilities arg needs to be a tal array */
 				       ld->hsm_capabilities,
 				       &channel->cid,
+			       &channel->peer->id,
+			       channel->dbid,
 				       &channel->funding,
 				       channel->funding_sats,
 				       channel->minimum_depth,
