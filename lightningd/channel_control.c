@@ -1396,7 +1396,7 @@ channel_cooperative_restore_complete(struct channel *channel, const u8 *msg)
 	struct bitcoin_tx *last_tx;
 
 	if (!fromwire_channeld_cooperative_restore_complete(
-			msg, &restored_commitment_number, &per_commitment_secret,
+			tmpctx, msg, &restored_commitment_number, &per_commitment_secret,
 			&commit_sig,
 			&signed_commitment_tx)) {
 		channel_internal_error(channel,
